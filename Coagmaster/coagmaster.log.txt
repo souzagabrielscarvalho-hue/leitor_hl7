@@ -1,0 +1,75 @@
+=~=~=~=~=~=~=~=~=~=~=~= PuTTY log 2026.05.05 09:37:32 =~=~=~=~=~=~=~=~=~=~=~=
+VIDA EXAMES
+******************************
+(0052)             CANAL 1
+05/05/2026         09:36:43
+N. SERIE(26031005)
+OPERADOR(OPERADOR)
+ID()
+
+NOME:  
+
+EXAME:            OUTROS1
+                  OUTROS
+
+TEMPO:     FALHOU!
+
+******************************
+
+
+VIDA EXAMES
+******************************
+(0053)             CANAL 2
+05/05/2026         09:37:01
+N. SERIE(26031005)
+OPERADOR(OPERADOR)
+ID()
+
+NOME:  
+
+EXAME:            OUTROS1
+                  OUTROS
+
+TEMPO:     FALHOU!
+
+******************************
+
+
+=~=~=~=~=~=~=~=~=~=~=~= PuTTY log 2026.05.05 09:39:32 =~=~=~=~=~=~=~=~=~=~=~=
+VIDA EXAMES
+******************************
+(0054)             CANAL 1
+05/05/2026         09:38:44
+N. SERIE(26031005)
+OPERADOR(OPERADOR)
+ID()
+
+NOME:  
+
+EXAME:            OUTROS1
+                  OUTROS
+
+TEMPO:     FALHOU!
+
+******************************
+
+
+VIDA EXAMES
+******************************
+(0055)             CANAL 2
+05/05/2026         09:39:44
+N. SERIE(26031005)
+OPERADOR(OPERADOR)
+ID()
+
+NOME:  
+
+EXAME:            OUTROS1
+                  OUTROS
+
+TEMPO:     FALHOU!
+
+******************************
+
+
+
