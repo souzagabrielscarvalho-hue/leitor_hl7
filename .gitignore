@@ -12,6 +12,10 @@ venv/
 
 # PyInstaller
 build/
+dist/
+!bh5100/dist/
+bh5100/dist/*
+!bh5100/dist/bh5100.exe
 *.spec.bak
 
 # IDE
