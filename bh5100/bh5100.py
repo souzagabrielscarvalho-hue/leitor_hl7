@@ -9,7 +9,7 @@ from threading import Thread
 import base64
 
 # ================= CONFIGURAÇÕES =================
-COM_PORT = 'COM5'
+COM_PORT = 'COM3'
 BAUD_RATE = 9600
 
 # ID da franquia configurado no banco de dados
