@@ -15,10 +15,9 @@ BAUD_RATE = 9600
 # ID da franquia configurado no banco de dados
 FRANCHISE_CREDENTIAL_ID = 'f47d9a16-df12-4091-b759-79648d13e371'
 
-# Webhook do Vida Exame (ajuste o IP conforme necessário)
-# Local: http://localhost:8039/api/integration/bh5100
-# Servidor: http://IP_DO_SERVIDOR:8039/api/integration/bh5100
-
+# Webhook do Vida Exame
+# Local: http://localhost/api/integration/bh5100
+# Produção: https://apoio.internal.vidaexame.com/api/integration/bh5100
 WEBHOOK_URL = f'https://apoio.internal.vidaexame.com/api/integration/bh5100?franchise_credential_id={FRANCHISE_CREDENTIAL_ID}'
 
 READ_INTERVAL = 0.1
@@ -30,14 +29,12 @@ DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
 BASE_DIR = os.path.join(DESKTOP, "AnalisadorBH5100")
 GERADOS_DIR = os.path.join(BASE_DIR, "gerados")
 ENVIADOS_DIR = os.path.join(BASE_DIR, "enviados")
-REJEITADOS_DIR = os.path.join(BASE_DIR, "rejeitados")  # arquivos com erro que precisam de inspeção manual
 LOG_FILE = os.path.join(BASE_DIR, "analisador_bh5100.log")
 # =================================================
 
 # Garantir que as pastas existam
 os.makedirs(GERADOS_DIR, exist_ok=True)
 os.makedirs(ENVIADOS_DIR, exist_ok=True)
-os.makedirs(REJEITADOS_DIR, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,21 +45,6 @@ logging.basicConfig(
 SB = chr(0x0B)
 EB = chr(0x1C)
 CR = chr(0x0D)
-
-def safe_move(origem: str, destino: str, max_retries: int = 3) -> bool:
-    """Move arquivo com retry para evitar WinError 32 (arquivo em uso)."""
-    for tentativa in range(max_retries):
-        try:
-            shutil.move(origem, destino)
-            return True
-        except (PermissionError, OSError) as e:
-            if tentativa < max_retries - 1:
-                logging.warning(f"Tentativa {tentativa+1}/{max_retries}: não foi possível mover {os.path.basename(origem)} ({e}), aguardando 1s...")
-                time.sleep(1)
-            else:
-                logging.error(f"✗ Falha ao mover {os.path.basename(origem)} após {max_retries} tentativas: {e}")
-                return False
-    return False
 
 def extrair_imagens_de_hl7(conteudo: str, diretorio_saida: str, prefixo: str = ""):
     limpo = conteudo.replace(SB, '').replace(EB, '')
@@ -317,33 +299,23 @@ def task_sender_to_webhook():
                 caminho_origem = os.path.join(GERADOS_DIR, nome_arquivo)
                 caminho_destino = os.path.join(ENVIADOS_DIR, nome_arquivo)
 
-                # Lê o arquivo HL7 (com retry para evitar WinError 32)
-                conteudo_hl7 = None
-                MAX_RETRIES_READ = 3
-                for tentativa_leitura in range(MAX_RETRIES_READ):
-                    try:
-                        with open(caminho_origem, 'r', encoding='utf-8', newline='') as f:
-                            conteudo_hl7 = f.read()
-                        break
-                    except PermissionError:
-                        if tentativa_leitura < MAX_RETRIES_READ - 1:
-                            logging.warning(f"Arquivo {nome_arquivo} em uso, tentando novamente em 1s ({tentativa_leitura+1}/{MAX_RETRIES_READ})...")
-                            time.sleep(1)
-                        else:
-                            logging.error(f"✗ Permissão negada ao ler arquivo após {MAX_RETRIES_READ} tentativas: {nome_arquivo}")
-                    except FileNotFoundError:
-                        logging.warning(f"Arquivo {nome_arquivo} não encontrado (pode ter sido removido por outro processo).")
-                        break
-                    except Exception as e:
-                        logging.error(f"✗ Erro inesperado ao ler arquivo {nome_arquivo}: {type(e).__name__}: {e}")
-                        break
-                
-                if conteudo_hl7 is None:
+                # Lê o arquivo HL7
+                try:
+                    with open(caminho_origem, 'r', encoding='utf-8', newline='') as f:
+                        conteudo_hl7 = f.read()
+                except PermissionError:
+                    logging.error(f"✗ Permissão negada ao ler arquivo: {nome_arquivo} — o arquivo pode estar em uso.")
+                    continue
+                except FileNotFoundError:
+                    logging.warning(f"Arquivo {nome_arquivo} não encontrado (pode ter sido removido por outro processo).")
+                    continue
+                except Exception as e:
+                    logging.error(f"✗ Erro inesperado ao ler arquivo {nome_arquivo}: {type(e).__name__}: {e}")
                     continue
                 
                 if not conteudo_hl7 or not conteudo_hl7.strip():
                     logging.warning(f"Arquivo {nome_arquivo} está vazio, movendo para enviados sem processar.")
-                    safe_move(caminho_origem, caminho_destino)
+                    shutil.move(caminho_origem, caminho_destino)
                     continue
                 
                 # Extrai imagens (se houver)
@@ -394,11 +366,15 @@ def task_sender_to_webhook():
                             break
                     
                     if not barcode:
-                        logging.warning(f"Arquivo {nome_arquivo}: código de barras (OBR-2) não encontrado no HL7. Usando nome do arquivo como fallback.")
-                        barcode = os.path.splitext(nome_arquivo)[0]
+                        logging.error(f"Arquivo {nome_arquivo}: código de barras (OBR-2) não encontrado no HL7.")
+                        logging.error(f"  Não é possível enviar sem código de barras — o fallback com nome de arquivo não corresponde a nenhum tag_identifier.")
+                        logging.error(f"  Movendo para enviados sem processar.")
+                        shutil.move(caminho_origem, caminho_destino)
+                        continue
                     
-                    # Monta o payload com campos individuais (formato esperado pelo integrateBh5100)
+                    # Monta o payload com franchise_credential_id incluso no corpo
                     payload = {
+                        'franchise_credential_id': FRANCHISE_CREDENTIAL_ID,
                         'FileName': barcode,
                         'ExamCode': 'HEMO',
                         **campos  # espalha WBC, NE, NE_Percent, etc. como chaves individuais
@@ -418,22 +394,15 @@ def task_sender_to_webhook():
                         if response.status_code in (200, 201):
                             logging.info(f"✓ Sucesso ({response.status_code}): {nome_arquivo} enviado ao Webhook.")
                             logging.info(f"  Resposta: {response.text[:500]}")
-                            if safe_move(caminho_origem, caminho_destino):
-                                logging.info(f"  Arquivo movido para: {caminho_destino}")
-                        elif response.status_code == 400:
-                            logging.error(f"✗ ERRO 400: Requisição inválida para {nome_arquivo} (barcode: {barcode}).")
-                            logging.error(f"  Possíveis causas: tag_identifier não encontrado, procedimento já liberado, ou conteúdo inválido.")
-                            logging.error(f"  Resposta: {response.text[:500]}")
-                            # Se o barcode é fallback (nome do arquivo), o servidor não conseguirá processar.
-                            # Move para rejeitados para inspeção manual.
-                            if barcode == os.path.splitext(nome_arquivo)[0]:
-                                logging.error(f"  Barcode é fallback (OBR-2 vazio no HL7). Movendo para rejeitados.")
-                                caminho_rejeitado = os.path.join(REJEITADOS_DIR, nome_arquivo)
-                                safe_move(caminho_origem, caminho_rejeitado)
-                            # Se o barcode é real mas deu 400, mantém em gerados para retry
+                            shutil.move(caminho_origem, caminho_destino)
+                            logging.info(f"  Arquivo movido para: {caminho_destino}")
                         elif response.status_code == 404:
                             logging.error(f"✗ ERRO 404: Endpoint não encontrado para {nome_arquivo}.")
                             logging.error(f"  Verifique se a URL está correta: {WEBHOOK_URL}")
+                            logging.error(f"  Resposta: {response.text[:500]}")
+                        elif response.status_code == 400:
+                            logging.error(f"✗ ERRO 400: Requisição inválida para {nome_arquivo} (barcode: {barcode}).")
+                            logging.error(f"  Possíveis causas: tag_identifier não encontrado, procedimento já liberado, ou conteúdo inválido.")
                             logging.error(f"  Resposta: {response.text[:500]}")
                         elif response.status_code == 500:
                             logging.error(f"✗ ERRO 500: Erro interno do servidor ao processar {nome_arquivo}.")
@@ -454,12 +423,10 @@ def task_sender_to_webhook():
                         logging.error(f"  URL: {WEBHOOK_URL}")
                         logging.error(f"  Detalhe: {e}")
                         logging.error(f"  Verifique: (1) Servidor está ligado? (2) Porta 8040 está acessível? (3) Firewall liberado?")
-                        # Arquivo permanece em gerados para retry quando o servidor voltar
                     except requests.exceptions.Timeout as e:
                         logging.error(f"✗ TIMEOUT: O servidor não respondeu a tempo para {nome_arquivo} (30s).")
                         logging.error(f"  URL: {WEBHOOK_URL}")
                         logging.error(f"  Detalhe: {e}")
-                        # Arquivo permanece em gerados para retry
                     except requests.exceptions.TooManyRedirects as e:
                         logging.error(f"✗ ERRO: Muitos redirecionamentos ao acessar {WEBHOOK_URL}: {e}")
                     except requests.exceptions.RequestException as e:
@@ -471,7 +438,7 @@ def task_sender_to_webhook():
                     logging.warning(f"Arquivo {nome_arquivo} NÃO contém campos de hemograma reconhecíveis.")
                     logging.warning(f"  Conteúdo (primeiros 200 chars): {conteudo_hl7[:200]}")
                     logging.warning(f"  Movendo para enviados sem processar.")
-                    safe_move(caminho_origem, caminho_destino)
+                    shutil.move(caminho_origem, caminho_destino)
 
         except FileNotFoundError as e:
             logging.error(f"Erro no monitor de envio: diretório não encontrado: {e}")
@@ -500,7 +467,7 @@ def main():
     logging.info(f"Data/Hora de início: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logging.info(f"Porta Serial: {COM_PORT} | Baud Rate: {BAUD_RATE}")
     logging.info(f"Webhook: {WEBHOOK_URL}")
-    logging.info(f"Pastas: gerados={GERADOS_DIR} | enviados={ENVIADOS_DIR} | rejeitados={REJEITADOS_DIR}")
+    logging.info(f"Pastas: gerados={GERADOS_DIR} | enviados={ENVIADOS_DIR}")
     logging.info("=" * 60)
     
     thread_envio = Thread(target=task_sender_to_webhook, daemon=True)
@@ -534,7 +501,6 @@ def main():
     buffer = ""
     bytes_recebidos = 0
     mensagens_processadas = 0
-    tempo_inicio = time.time()  # timestamp de início para cálculo correto de uptime
     ultimo_log_status = time.time()
     INTERVALO_LOG_STATUS = 300  # log de status a cada 5 minutos
 
@@ -560,24 +526,14 @@ def main():
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                 filename = f"exame_{timestamp}.hl7"
                 file_path = os.path.join(GERADOS_DIR, filename)
-                # Escrita atômica: grava em .tmp e renomeia para .hl7,
-                # evitando que a thread de envio leia um arquivo incompleto (WinError 32)
-                tmp_path = file_path + ".tmp"
 
                 try:
-                    with open(tmp_path, "w", encoding="utf-8", newline='') as f:
+                    with open(file_path, "w", encoding="utf-8", newline='') as f:
                         f.write(hl7_message)
-                    os.replace(tmp_path, file_path)  # operação atômica no Windows
                     mensagens_processadas += 1
                     logging.info(f"✓ Mensagem HL7 salva: {filename} ({len(hl7_message)} bytes)")
                 except OSError as e:
                     logging.error(f"✗ Erro ao salvar arquivo {filename}: {e} (espaço em disco?)")
-                    # limpa o .tmp se existir
-                    if os.path.exists(tmp_path):
-                        try:
-                            os.remove(tmp_path)
-                        except:
-                            pass
                     continue
 
                 ack_bytes = generate_ack(hl7_message)
@@ -605,7 +561,7 @@ def main():
             # Log de status periódico (a cada 5 min)
             agora = time.time()
             if agora - ultimo_log_status >= INTERVALO_LOG_STATUS:
-                logging.info(f"[STATUS] Uptime: {int(agora - tempo_inicio)}s | "
+                logging.info(f"[STATUS] Uptime: {int(agora - ultimo_log_status)}s | "
                            f"Mensagens processadas: {mensagens_processadas} | "
                            f"Bytes recebidos: {bytes_recebidos} | "
                            f"Buffer atual: {len(buffer)} bytes | "
