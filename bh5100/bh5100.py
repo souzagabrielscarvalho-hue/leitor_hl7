@@ -114,12 +114,12 @@ def parse_hl7_to_txt(hl7_message: str) -> str:
         clean_message = clean_message.replace('\r\n', '\n').replace('\r', '\n')
         segments = clean_message.split('\n')
 
-        # --- Extrair código de barras (OBR-2) para usar como FileName ---
+        # --- Extrair código de barras (OBR-3 = Sample Number / tag_identifier) ---
         barcode = ""
         for seg in segments:
             fields = seg.split('|')
-            if fields[0] == 'OBR' and len(fields) > 2:
-                barcode = fields[2] if len(fields) > 2 else ""
+            if fields[0] == 'OBR' and len(fields) > 3:
+                barcode = fields[3] if len(fields) > 3 else ""
                 break
 
         # Mapeamento: test_id (campo OBX-3, parte antes do ^) → nome simplificado
@@ -142,10 +142,12 @@ def parse_hl7_to_txt(hl7_message: str) -> str:
             'MCH':  'MCH',
             'MCHC': 'MCHC',
             'RDW_CV':'RDW_CV',
+            'RDW_SD':'RDW_SD',
             'PLT':  'PLT',
             'PCT':  'PCT',
             'MPV':  'MPV',
             'PDW':  'PDW',
+            'P_LCR':'P_LCR',
         }
 
         # Coletar resultados: { nome_simplificado: (valor, flag) }
@@ -181,8 +183,8 @@ def parse_hl7_to_txt(hl7_message: str) -> str:
         ORDEM = [
             'WBC', 'NE', 'NE_Percent', 'LY', 'LY_Percent',
             'MO', 'MO_Percent', 'EO', 'EO_Percent', 'BA', 'BA_Percent',
-            'RBC', 'HGB', 'HCT', 'MCV', 'MCH', 'MCHC', 'RDW_CV',
-            'PLT', 'PCT', 'MPV', 'PDW',
+            'RBC', 'HGB', 'HCT', 'MCV', 'MCH', 'MCHC', 'RDW_CV', 'RDW_SD',
+            'PLT', 'PCT', 'MPV', 'PDW', 'P_LCR',
         ]
 
         lines = [f"FileName: {barcode}"]
@@ -222,10 +224,12 @@ def parse_hl7_to_dict(hl7_message: str) -> dict:
             'MCH':  'MCH',
             'MCHC': 'MCHC',
             'RDW_CV':'RDW_CV',
+            'RDW_SD':'RDW_SD',
             'PLT':  'PLT',
             'PCT':  'PCT',
             'MPV':  'MPV',
             'PDW':  'PDW',
+            'P_LCR':'P_LCR',
         }
 
         resultados = {}
@@ -353,7 +357,7 @@ def task_sender_to_webhook():
                         except Exception as e:
                             logging.warning(f"Erro ao salvar TXT de debug para {nome_arquivo}: {e}")
 
-                    # Extrai o código de barras do HL7
+                    # Extrai o código de barras (OBR-3 = Sample Number / tag_identifier) do HL7
                     barcode = ""
                     clean_message = conteudo_hl7.replace(SB, '').replace(EB, '')
                     clean_message = clean_message.replace('\r\n', '\n').replace('\r', '\n')
@@ -361,13 +365,13 @@ def task_sender_to_webhook():
                     
                     for seg in segments:
                         fields = seg.split('|')
-                        if fields[0] == 'OBR' and len(fields) > 2:
-                            barcode = fields[2] if len(fields) > 2 else ""
+                        if fields[0] == 'OBR' and len(fields) > 3:
+                            barcode = fields[3] if len(fields) > 3 else ""
                             break
                     
                     if not barcode:
-                        logging.error(f"Arquivo {nome_arquivo}: código de barras (OBR-2) não encontrado no HL7.")
-                        logging.error(f"  Não é possível enviar sem código de barras — o fallback com nome de arquivo não corresponde a nenhum tag_identifier.")
+                        logging.error(f"Arquivo {nome_arquivo}: código de barras (OBR-3 / Sample Number) não encontrado no HL7.")
+                        logging.error(f"  Não é possível enviar sem código de barras — o tag_identifier é obrigatório para identificar o procedimento.")
                         logging.error(f"  Movendo para enviados sem processar.")
                         shutil.move(caminho_origem, caminho_destino)
                         continue
@@ -383,7 +387,7 @@ def task_sender_to_webhook():
                     headers = {'Content-Type': 'application/json'}
                     
                     try:
-                        logging.info(f"Enviando {nome_arquivo} (barcode: {barcode}) para o webhook...")
+                        logging.info(f"Enviando {nome_arquivo} (tag_identifier: {barcode}) para o webhook...")
                         response = requests.post(
                             WEBHOOK_URL, 
                             json=payload,
@@ -401,7 +405,7 @@ def task_sender_to_webhook():
                             logging.error(f"  Verifique se a URL está correta: {WEBHOOK_URL}")
                             logging.error(f"  Resposta: {response.text[:500]}")
                         elif response.status_code == 400:
-                            logging.error(f"✗ ERRO 400: Requisição inválida para {nome_arquivo} (barcode: {barcode}).")
+                            logging.error(f"✗ ERRO 400: Requisição inválida para {nome_arquivo} (tag_identifier: {barcode}).")
                             logging.error(f"  Possíveis causas: tag_identifier não encontrado, procedimento já liberado, ou conteúdo inválido.")
                             logging.error(f"  Resposta: {response.text[:500]}")
                         elif response.status_code == 500:
