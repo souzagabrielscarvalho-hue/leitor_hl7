@@ -5,15 +5,28 @@ a = Analysis(
     ['bh5100\\bh5100.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    datas=[
+        # Adicione arquivos de dados aqui, ex:
+        # ('config.ini', '.'),
+        # ('imagens', 'imagens'),
+    ],
+    hiddenimports=[
+        # Adicione imports não detectados automaticamente, ex:
+        # 'serial',
+        # 'hl7',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # Módulos desnecessários para reduzir tamanho, ex:
+        # 'tkinter',
+        # 'unittest',
+    ],
     noarchive=False,
     optimize=0,
 )
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -29,10 +42,15 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    # --- Opções adicionais úteis ---
+    icon='Logo-VIDA-EXAMES-02-fixed.ico',  # Ícone do executável
+    # version='version.txt',      # Info de versão do Windows
+    # uac_admin=False,            # True = pedir privilégios de admin
+    # uac_uiaccess=False,         # Acessibilidade UI
 )

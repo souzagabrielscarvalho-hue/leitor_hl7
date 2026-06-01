@@ -5,6 +5,7 @@ import logging
 import datetime
 import os
 import shutil
+import sys
 from threading import Thread
 import base64
 
@@ -36,10 +37,17 @@ LOG_FILE = os.path.join(BASE_DIR, "analisador_bh5100.log")
 os.makedirs(GERADOS_DIR, exist_ok=True)
 os.makedirs(ENVIADOS_DIR, exist_ok=True)
 
+# Redirecionar stdout/stderr para evitar travamento em modo --noconsole (PyInstaller)
+# Quando não há console, sys.stdout/sys.stderr podem ser None ou causar erro ao escrever
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, 'w', encoding='utf-8')
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, 'w', encoding='utf-8')
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.FileHandler(LOG_FILE, encoding='utf-8'), logging.StreamHandler()]
+    handlers=[logging.FileHandler(LOG_FILE, encoding='utf-8')]
 )
 
 SB = chr(0x0B)
@@ -123,18 +131,33 @@ def parse_hl7_to_txt(hl7_message: str) -> str:
                 break
 
         # Mapeamento: test_id (campo OBX-3, parte antes do ^) → nome simplificado
+        # Nota: O BH5100 envia percentuais SEM sufixo '%' (ex: LYM, NEU) conforme manual UT-5160
+        #       e absolutos com sufixo '#' (ex: LYM#, NEU#)
+        #       Se não receber percentuais, eles serão calculados: Percent = (Absolute / WBC) * 100
         MAPEAMENTO = {
             'WBC':  'WBC',
             'NEU#': 'NE',
             'NEU':  'NE_Percent',
+            'NEU%': 'NE_Percent',
             'LYM#': 'LY',
             'LYM':  'LY_Percent',
+            'LYM%': 'LY_Percent',
             'MON#': 'MO',
             'MON':  'MO_Percent',
+            'MON%': 'MO_Percent',
             'EOS#': 'EO',
             'EOS':  'EO_Percent',
+            'EOS%': 'EO_Percent',
             'BASO#':'BA',
             'BASO': 'BA_Percent',
+            'BASO%':'BA_Percent',
+            'NRBC#':'NRBC',
+            'NRBC%':'NRBC_Percent',
+            'NRBC': 'NRBC_Percent',
+            'ALY#': 'ALY',
+            'ALY%': 'ALY_Percent',
+            'LIC#': 'LIC',
+            'LIC%': 'LIC_Percent',
             'RBC':  'RBC',
             'HGB':  'HGB',
             'HCT':  'HCT',
@@ -148,6 +171,8 @@ def parse_hl7_to_txt(hl7_message: str) -> str:
             'MPV':  'MPV',
             'PDW':  'PDW',
             'P_LCR':'P_LCR',
+            'P-LCR':'P_LCR',
+            'P_LCC':'P_LCC',
         }
 
         # Coletar resultados: { nome_simplificado: (valor, flag) }
@@ -167,14 +192,76 @@ def parse_hl7_to_txt(hl7_message: str) -> str:
 
             nome = MAPEAMENTO.get(test_id)
             if nome is None:
+                logging.debug(f"Campo OBX não mapeado: test_id='{test_id}' (raw='{test_id_raw}'). Ignorando.")
                 continue
 
             value = fields[5]
+            # Limpar prefixo '*' que o BH5100 adiciona em valores anormais
+            value = value.lstrip('*')
             abnormal_flag = fields[8] if len(fields) > 8 else ""
 
             # Flag: N → sem flag; outros (H, L, *, etc.) → anexar ao valor
             flag = abnormal_flag if abnormal_flag and abnormal_flag != 'N' else ''
             resultados[nome] = (value, flag)
+
+        # Calcular percentuais ausentes a partir dos absolutos e WBC
+        # Fórmula: Percent = (Absolute / WBC) * 100
+        def calcular_percentual(valor_absoluto_com_flag: str, wbc_com_flag: str) -> tuple:
+            """Calcula percentual a partir de valor absoluto e WBC. Retorna (valor, flag)."""
+            try:
+                # Remover flag do valor absoluto
+                valor_abs = valor_absoluto_com_flag
+                flag_origem = ''
+                if valor_abs and valor_abs[-1] in ('H', 'L'):
+                    flag_origem = valor_abs[-1]
+                    valor_abs = valor_abs[:-1]
+                
+                # Remover flag do WBC
+                wbc_value = wbc_com_flag
+                if wbc_value and wbc_value[-1] in ('H', 'L'):
+                    wbc_value = wbc_value[:-1]
+                
+                # Converter para float e calcular
+                abs_float = float(valor_abs)
+                wbc_float = float(wbc_value)
+                
+                if wbc_float == 0:
+                    logging.warning(f"WBC = 0, não é possível calcular percentual para valor absoluto {valor_abs}")
+                    return None
+                
+                percentual = round((abs_float / wbc_float) * 100, 2)
+                return (str(percentual), flag_origem)
+            except (ValueError, AttributeError, TypeError) as e:
+                logging.debug(f"Erro ao calcular percentual para {valor_absoluto_com_flag} / {wbc_com_flag}: {e}")
+                return None
+        
+        # Verificar e calcular LY_Percent se não foi recebido
+        if 'LY_Percent' not in resultados and 'LY' in resultados and 'WBC' in resultados:
+            resultado = calcular_percentual(resultados['LY'], resultados['WBC'])
+            if resultado:
+                resultados['LY_Percent'] = resultado
+                logging.info(f"LY_Percent calculado (não foi recebido do equipamento): {resultado[0]}{resultado[1]}")
+        
+        # Verificar e calcular MO_Percent se não foi recebido
+        if 'MO_Percent' not in resultados and 'MO' in resultados and 'WBC' in resultados:
+            resultado = calcular_percentual(resultados['MO'], resultados['WBC'])
+            if resultado:
+                resultados['MO_Percent'] = resultado
+                logging.info(f"MO_Percent calculado (não foi recebido do equipamento): {resultado[0]}{resultado[1]}")
+        
+        # Verificar e calcular EO_Percent se não foi recebido
+        if 'EO_Percent' not in resultados and 'EO' in resultados and 'WBC' in resultados:
+            resultado = calcular_percentual(resultados['EO'], resultados['WBC'])
+            if resultado:
+                resultados['EO_Percent'] = resultado
+                logging.info(f"EO_Percent calculado (não foi recebido do equipamento): {resultado[0]}{resultado[1]}")
+        
+        # Verificar e calcular BA_Percent se não foi recebido
+        if 'BA_Percent' not in resultados and 'BA' in resultados and 'WBC' in resultados:
+            resultado = calcular_percentual(resultados['BA'], resultados['WBC'])
+            if resultado:
+                resultados['BA_Percent'] = resultado
+                logging.info(f"BA_Percent calculado (não foi recebido do equipamento): {resultado[0]}{resultado[1]}")
 
         if not resultados:
             return ""
@@ -183,8 +270,9 @@ def parse_hl7_to_txt(hl7_message: str) -> str:
         ORDEM = [
             'WBC', 'NE', 'NE_Percent', 'LY', 'LY_Percent',
             'MO', 'MO_Percent', 'EO', 'EO_Percent', 'BA', 'BA_Percent',
+            'NRBC', 'NRBC_Percent', 'ALY', 'ALY_Percent', 'LIC', 'LIC_Percent',
             'RBC', 'HGB', 'HCT', 'MCV', 'MCH', 'MCHC', 'RDW_CV', 'RDW_SD',
-            'PLT', 'PCT', 'MPV', 'PDW', 'P_LCR',
+            'PLT', 'PCT', 'MPV', 'PDW', 'P_LCR', 'P_LCC',
         ]
 
         lines = [f"FileName: {barcode}"]
@@ -205,18 +293,33 @@ def parse_hl7_to_dict(hl7_message: str) -> dict:
         clean_message = clean_message.replace('\r\n', '\n').replace('\r', '\n')
         segments = clean_message.split('\n')
 
+        # Nota: O BH5100 envia percentuais SEM sufixo '%' (ex: LYM, NEU) conforme manual UT-5160
+        #       e absolutos com sufixo '#' (ex: LYM#, NEU#)
+        #       Se não receber percentuais, eles serão calculados: Percent = (Absolute / WBC) * 100
         MAPEAMENTO = {
             'WBC':  'WBC',
             'NEU#': 'NE',
             'NEU':  'NE_Percent',
+            'NEU%': 'NE_Percent',
             'LYM#': 'LY',
             'LYM':  'LY_Percent',
+            'LYM%': 'LY_Percent',
             'MON#': 'MO',
             'MON':  'MO_Percent',
+            'MON%': 'MO_Percent',
             'EOS#': 'EO',
             'EOS':  'EO_Percent',
+            'EOS%': 'EO_Percent',
             'BASO#':'BA',
             'BASO': 'BA_Percent',
+            'BASO%':'BA_Percent',
+            'NRBC#':'NRBC',
+            'NRBC%':'NRBC_Percent',
+            'NRBC': 'NRBC_Percent',
+            'ALY#': 'ALY',
+            'ALY%': 'ALY_Percent',
+            'LIC#': 'LIC',
+            'LIC%': 'LIC_Percent',
             'RBC':  'RBC',
             'HGB':  'HGB',
             'HCT':  'HCT',
@@ -230,6 +333,8 @@ def parse_hl7_to_dict(hl7_message: str) -> dict:
             'MPV':  'MPV',
             'PDW':  'PDW',
             'P_LCR':'P_LCR',
+            'P-LCR':'P_LCR',
+            'P_LCC':'P_LCC',
         }
 
         resultados = {}
@@ -247,12 +352,74 @@ def parse_hl7_to_dict(hl7_message: str) -> dict:
 
             nome = MAPEAMENTO.get(test_id)
             if nome is None:
+                logging.debug(f"Campo OBX não mapeado: test_id='{test_id}' (raw='{test_id_raw}'). Ignorando.")
                 continue
 
             value = fields[5]
+            # Limpar prefixo '*' que o BH5100 adiciona em valores anormais
+            value = value.lstrip('*')
             abnormal_flag = fields[8] if len(fields) > 8 else ""
             flag = abnormal_flag if abnormal_flag and abnormal_flag != 'N' else ''
             resultados[nome] = f"{value}{flag}"
+
+        # Calcular percentuais ausentes a partir dos absolutos e WBC
+        # Fórmula: Percent = (Absolute / WBC) * 100
+        def calcular_percentual_dict(valor_absoluto_com_flag: str, wbc_com_flag: str) -> str:
+            """Calcula percentual a partir de valor absoluto e WBC. Retorna valor com flag."""
+            try:
+                # Remover flag do valor absoluto
+                valor_abs = valor_absoluto_com_flag
+                flag_origem = ''
+                if valor_abs and valor_abs[-1] in ('H', 'L'):
+                    flag_origem = valor_abs[-1]
+                    valor_abs = valor_abs[:-1]
+                
+                # Remover flag do WBC
+                wbc_value = wbc_com_flag
+                if wbc_value and wbc_value[-1] in ('H', 'L'):
+                    wbc_value = wbc_value[:-1]
+                
+                # Converter para float e calcular
+                abs_float = float(valor_abs)
+                wbc_float = float(wbc_value)
+                
+                if wbc_float == 0:
+                    logging.warning(f"WBC = 0, não é possível calcular percentual para valor absoluto {valor_abs}")
+                    return None
+                
+                percentual = round((abs_float / wbc_float) * 100, 2)
+                return f"{percentual}{flag_origem}"
+            except (ValueError, AttributeError, TypeError) as e:
+                logging.debug(f"Erro ao calcular percentual para {valor_absoluto_com_flag} / {wbc_com_flag}: {e}")
+                return None
+        
+        # Verificar e calcular LY_Percent se não foi recebido
+        if 'LY_Percent' not in resultados and 'LY' in resultados and 'WBC' in resultados:
+            resultado = calcular_percentual_dict(resultados['LY'], resultados['WBC'])
+            if resultado:
+                resultados['LY_Percent'] = resultado
+                logging.info(f"LY_Percent calculado (não foi recebido do equipamento): {resultado}")
+        
+        # Verificar e calcular MO_Percent se não foi recebido
+        if 'MO_Percent' not in resultados and 'MO' in resultados and 'WBC' in resultados:
+            resultado = calcular_percentual_dict(resultados['MO'], resultados['WBC'])
+            if resultado:
+                resultados['MO_Percent'] = resultado
+                logging.info(f"MO_Percent calculado (não foi recebido do equipamento): {resultado}")
+        
+        # Verificar e calcular EO_Percent se não foi recebido
+        if 'EO_Percent' not in resultados and 'EO' in resultados and 'WBC' in resultados:
+            resultado = calcular_percentual_dict(resultados['EO'], resultados['WBC'])
+            if resultado:
+                resultados['EO_Percent'] = resultado
+                logging.info(f"EO_Percent calculado (não foi recebido do equipamento): {resultado}")
+        
+        # Verificar e calcular BA_Percent se não foi recebido
+        if 'BA_Percent' not in resultados and 'BA' in resultados and 'WBC' in resultados:
+            resultado = calcular_percentual_dict(resultados['BA'], resultados['WBC'])
+            if resultado:
+                resultados['BA_Percent'] = resultado
+                logging.info(f"BA_Percent calculado (não foi recebido do equipamento): {resultado}")
 
         return resultados
     except Exception as e:

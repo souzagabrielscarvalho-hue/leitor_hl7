@@ -10,16 +10,16 @@ from threading import Thread
 import json
 
 # ================= CONFIGURAÇÕES =================
-COM_PORT = 'COM5'
-BAUD_RATE = 9600
+COM_PORT = 'COM4'
+BAUD_RATE = 115200
 
 # ID da franquia configurado no banco de dados
 FRANCHISE_CREDENTIAL_ID = '85361c80-9688-47e9-8cb3-ed838a9b1832'
 
 # Webhook do Coagmaster
 # Local: http://localhost:8039/api/integration/coagmaster
-# Servidor: http://IP_DO_SERVIDOR:8039/api/integration/coagmaster
-WEBHOOK_URL = f'http://localhost:8039/api/integration/coagmaster?franchise_credential_id={FRANCHISE_CREDENTIAL_ID}'
+# Produção: https://apoio.internal.vidaexame.com/api/integration/coagmaster
+WEBHOOK_URL = f'https://apoio.internal.vidaexame.com/api/integration/coagmaster?franchise_credential_id={FRANCHISE_CREDENTIAL_ID}'
 
 READ_INTERVAL = 0.1
 CHECK_FILES_INTERVAL = 5
@@ -65,15 +65,13 @@ def split_exams_from_log(content: str) -> list[str]:
     
     # Divide por blocos de exame
     # Cada exame começa com um número entre parênteses: (0001), (0052), etc.
-    # Padrão: linha com (NNNN) seguida de dados do exame
-    
     lines = content.split('\n')
     current_exam = []
     exam_started = False
     
     for line in lines:
-        # Detecta início de novo exame: linha contendo apenas (NNNN) ou (NNNN) no início
-        if re.match(r'^\s*\(\d+\)', line) or re.match(r'^\(\d+\)', line):
+        # Detecta início de novo exame: linha contendo (NNNN) com possível CANAL
+        if re.match(r'^\s*\(\d+\)', line):
             # Se já existe um exame em andamento, salva ele
             if current_exam and exam_started:
                 exam_text = '\n'.join(current_exam).strip()
@@ -98,7 +96,7 @@ def parse_coagmaster_exam(text: str) -> dict[str, str]:
     """
     Extrai os dados de um exame do Coagmaster e retorna um dicionário.
     
-    Formato esperado (exemplo real):
+    Formato esperado (exemplo real - TP):
         NOME DO LAB
         (0001)
         18/01/2018
@@ -115,6 +113,19 @@ def parse_coagmaster_exam(text: str) -> dict[str, str]:
         CONTROLE 100%: 14,2s
         ID(201801210001)
         OPERADOR (CARLOS)
+    
+    Formato real com falha:
+        VIDA EXAMES
+        (0052)
+        CANAL 1
+        05/05/2026         09:36:43
+        N. SERIE(26031005)
+        OPERADOR(OPERADOR)
+        ID()
+        NOME:  
+        EXAME:            OUTROS1
+                          OUTROS
+        TEMPO:     FALHOU!
     
     Args:
         text: Texto do exame extraído do log
@@ -148,41 +159,69 @@ def parse_coagmaster_exam(text: str) -> dict[str, str]:
             result['Time'] = match.group(1)
         
         # Nome do paciente: NOME: ...
+        # IMPORTANTE: Não capturar se NOME: está vazio ou contém apenas espaços
+        # Evita capturar a próxima linha como nome (ex: "EXAME: OUTROS1")
         match = re.search(r'NOME:\s*(.+)', text, re.IGNORECASE)
         if match:
-            result['PatientName'] = match.group(1).strip()
+            nome = match.group(1).strip()
+            if nome and not re.match(r'^(EXAME|CANAL|TEMPO|RELA)', nome, re.IGNORECASE):
+                result['PatientName'] = nome
         
         # Código do exame: Exame: XX
-        match = re.search(r'Exame:\s*(\w+)', text, re.IGNORECASE)
+        match = re.search(r'Exame:\s*(\S+)', text, re.IGNORECASE)
         if match:
             result['ExamType'] = match.group(1).upper()
         
         # Descrição do exame (linha seguinte ao código)
+        # A descrição é a primeira linha não-vazia após "Exame: XX"
+        # IMPORTANTE: Não confundir com linhas de dados (TEMPO:, RELAÇÃO:, etc.)
+        # que começam com a palavra-chave seguida de ":"
         for i, line in enumerate(lines):
             if re.match(r'^\s*Exame:', line, re.IGNORECASE):
-                # Próxima linha não vazia é a descrição
                 for j in range(i + 1, len(lines)):
                     next_line = lines[j].strip()
-                    if next_line and not re.match(r'^(TEMPO|RELAÇÃO|INR|CONTROLE|ID|OPERADOR|CANAL|\d{2}/)', next_line):
-                        result['ExamDescription'] = next_line
-                        break
+                    # Ignorar linhas vazias, "%" sozinho, porcentagens isoladas
+                    if not next_line or next_line == '%' or re.match(r'^[\d,]+%$', next_line):
+                        continue
+                    # Ignorar linhas de dados que contêm ":" (TEMPO:, RELAÇÃO:, etc.)
+                    if re.match(r'^(TEMPO|RELA[CÇ][AÃ]O|INR|CONTROLE|ID|OPERADOR|CANAL|NOME|N\.\s*SERIE)', next_line, re.IGNORECASE) and ':' in next_line:
+                        continue
+                    # Ignorar linhas que são apenas "ID(...)"
+                    if re.match(r'^ID\(', next_line, re.IGNORECASE):
+                        continue
+                    # Ignorar datas e horas
+                    if re.match(r'^\d{2}/\d{2}/\d{4}', next_line):
+                        continue
+                    if re.match(r'^\d{2}:\d{2}:\d{2}', next_line):
+                        continue
+                    # Ignorar linhas de asteriscos
+                    if re.match(r'^\*{10,}', next_line):
+                        continue
+                    # Se chegou aqui, é a descrição do exame
+                    result['ExamDescription'] = next_line
+                    break
                 break
         
-        # Tempo medido: TEMPO: XX,X s
-        match = re.search(r'TEMPO:\s*([\d,]+\s*s?)', text, re.IGNORECASE)
+        # Tempo medido: TEMPO: XX,X s  ou  TEMPO: FALHOU!
+        match = re.search(r'TEMPO:\s*(.+)', text, re.IGNORECASE)
         if match:
-            result['TimeValue'] = match.group(1).strip()
+            tempo_valor = match.group(1).strip()
+            result['TimeValue'] = tempo_valor
         
         # Relação: RELAÇÃO: X.XX ou X,XX
-        match = re.search(r'RELAÇÃO:\s*([\d,\.]+)', text, re.IGNORECASE)
+        match = re.search(r'RELA[CÇ][AÃ]O:\s*([\d,\.]+)', text, re.IGNORECASE)
         if match:
             result['Relation'] = match.group(1).replace(',', '.')
         
         # Porcentagem: XX,X%
-        # Procura por linha que contém apenas porcentagem ou XX,X% isolado
-        match = re.search(r'(?<!\d)([\d,]+%)(?!\d)', text)
-        if match:
-            result['Percentage'] = match.group(1).replace(',', '.')
+        # IMPORTANTE: Capturar apenas a linha que contém SOMENTE a porcentagem
+        # (para evitar capturar "100%" do CONTROLE)
+        for line in lines:
+            stripped = line.strip()
+            # Linha que contém apenas uma porcentagem (ex: "81,4%" ou "81.4%")
+            if re.match(r'^[\d,]+%$', stripped):
+                result['Percentage'] = stripped.replace(',', '.')
+                break
         
         # INR: INR X,XX
         match = re.search(r'INR\s*([\d,]+)', text, re.IGNORECASE)
@@ -194,10 +233,17 @@ def parse_coagmaster_exam(text: str) -> dict[str, str]:
         if match:
             result['Control'] = match.group(1).strip()
         
-        # ID do paciente: ID(...)
-        match = re.search(r'ID\(([^)]+)\)', text)
+        # Concentração (para Fibrinogênio): CONCENTRAÇÃO: XX,X ou mg/dL
+        match = re.search(r'CONCENTRA[CÇ][AÃ]O:\s*([\d,\.]+\s*(?:mg/dL|g/L|%)?)', text, re.IGNORECASE)
         if match:
-            result['PatientID'] = match.group(1)
+            result['Concentration'] = match.group(1).strip()
+        
+        # ID do paciente: ID(...)
+        match = re.search(r'ID\(([^)]*)\)', text)
+        if match:
+            patient_id = match.group(1).strip()
+            if patient_id:  # Só incluir se não estiver vazio
+                result['PatientID'] = patient_id
         
         # Operador: OPERADOR (...)
         match = re.search(r'OPERADOR\s*\(([^)]+)\)', text, re.IGNORECASE)
@@ -210,19 +256,19 @@ def parse_coagmaster_exam(text: str) -> dict[str, str]:
             result['SerialNumber'] = match.group(1)
         
         # Laboratório (cabeçalho): primeira linha antes do número do exame
-        # Procura a linha que vem antes da linha com (NNNN)
         for i, line in enumerate(lines):
             if re.match(r'^\s*\(\d+\)', line):
                 # A linha anterior (se existir e não for vazia) é o laboratório
                 if i > 0:
                     prev_line = lines[i - 1].strip()
-                    if prev_line and not re.match(r'^[\(\d]', prev_line):
+                    if prev_line and not re.match(r'^[\(\d]', prev_line) and not re.match(r'^\*{10,}', prev_line):
                         result['Laboratory'] = prev_line
                 break
         
         # Adiciona campos obrigatórios para o webhook
+        # FileName = PatientID (código de barras) se disponível, senão ExamNumber
         result['FileName'] = result.get('PatientID', '') or result.get('ExamNumber', '')
-        result['ExamCode'] = 'COAG'
+        result['ExamCode'] = 'COAGU'
         
         # Verifica se o exame falhou
         if 'FALHOU' in text.upper():
@@ -243,18 +289,42 @@ def task_sender_to_webhook():
     os exames para o webhook.
     """
     logging.info("Iniciando monitor de envio para Webhook...")
+    logging.info(f"URL do Webhook: {WEBHOOK_URL}")
+    logging.info(f"Verificando arquivos a cada {CHECK_FILES_INTERVAL}s na pasta: {GERADOS_DIR}")
+    
+    erros_consecutivos = 0
+    MAX_ERROS_CONSECUTIVOS = 10
     
     while True:
         try:
             arquivos = [f for f in os.listdir(GERADOS_DIR) if f.endswith('.log')]
-            
+
+            if arquivos:
+                logging.info(f"Encontrados {len(arquivos)} arquivo(s) de log para processar.")
+                erros_consecutivos = 0  # reset ao encontrar arquivos
+
             for nome_arquivo in arquivos:
                 caminho_origem = os.path.join(GERADOS_DIR, nome_arquivo)
                 caminho_destino = os.path.join(ENVIADOS_DIR, nome_arquivo)
-                
+
                 # Lê o arquivo de log
-                with open(caminho_origem, 'r', encoding='utf-8', errors='ignore') as f:
-                    conteudo_log = f.read()
+                try:
+                    with open(caminho_origem, 'r', encoding='utf-8', errors='ignore') as f:
+                        conteudo_log = f.read()
+                except PermissionError:
+                    logging.error(f"✗ Permissão negada ao ler arquivo: {nome_arquivo} — o arquivo pode estar em uso.")
+                    continue
+                except FileNotFoundError:
+                    logging.warning(f"Arquivo {nome_arquivo} não encontrado (pode ter sido removido por outro processo).")
+                    continue
+                except Exception as e:
+                    logging.error(f"✗ Erro inesperado ao ler arquivo {nome_arquivo}: {type(e).__name__}: {e}")
+                    continue
+                
+                if not conteudo_log or not conteudo_log.strip():
+                    logging.warning(f"Arquivo {nome_arquivo} está vazio, movendo para enviados sem processar.")
+                    shutil.move(caminho_origem, caminho_destino)
+                    continue
                 
                 # Separa os exames individuais
                 exames = split_exams_from_log(conteudo_log)
@@ -275,6 +345,12 @@ def task_sender_to_webhook():
                         logging.warning(f"Exame {i} inválido em {nome_arquivo}, ignorando.")
                         continue
                     
+                    # Verifica se tem FileName (tag_identifier) para identificar o procedimento
+                    if not payload.get('FileName'):
+                        logging.error(f"✗ Exame {i} de {nome_arquivo}: FileName (tag_identifier) vazio — impossível identificar o procedimento.")
+                        logging.error(f"  ID do paciente não encontrado no exame. Verifique se o equipamento está configurado para enviar o código de barras.")
+                        continue
+                    
                     # Salva JSON de referência
                     pasta_txt = os.path.join(ENVIADOS_DIR, "txt")
                     os.makedirs(pasta_txt, exist_ok=True)
@@ -283,14 +359,18 @@ def task_sender_to_webhook():
                     nome_txt = f"{os.path.splitext(nome_arquivo)[0]}_exame_{i}_{timestamp}.json"
                     caminho_txt = os.path.join(pasta_txt, nome_txt)
                     
-                    with open(caminho_txt, "w", encoding="utf-8") as f:
-                        f.write(json.dumps(payload, indent=2, ensure_ascii=False))
-                    logging.info(f"JSON salvo: {caminho_txt}")
+                    try:
+                        with open(caminho_txt, "w", encoding="utf-8") as f:
+                            f.write(json.dumps(payload, indent=2, ensure_ascii=False))
+                        logging.info(f"JSON salvo: {caminho_txt}")
+                    except Exception as e:
+                        logging.warning(f"Erro ao salvar JSON de debug para exame {i}: {e}")
                     
                     # Envia para o webhook
                     headers = {'Content-Type': 'application/json'}
                     
                     try:
+                        logging.info(f"Enviando exame {i} de {nome_arquivo} (tag_identifier: {payload.get('FileName')}) para o webhook...")
                         response = requests.post(
                             WEBHOOK_URL,
                             json=payload,
@@ -299,27 +379,68 @@ def task_sender_to_webhook():
                         )
                         
                         if response.status_code in (200, 201):
-                            logging.info(f"✓ Sucesso: Exame {i} de {nome_arquivo} enviado ao Webhook.")
+                            logging.info(f"✓ Sucesso ({response.status_code}): Exame {i} de {nome_arquivo} enviado ao Webhook.")
                             try:
                                 resp_json = response.json()
                                 msg = resp_json.get('message', 'OK')
                                 logging.info(f"  Mensagem: {msg}")
                             except:
                                 pass
+                        elif response.status_code == 404:
+                            logging.error(f"✗ ERRO 404: Endpoint não encontrado para exame {i} de {nome_arquivo}.")
+                            logging.error(f"  Verifique se a URL está correta: {WEBHOOK_URL}")
+                            logging.error(f"  Resposta: {response.text[:500]}")
+                        elif response.status_code == 400:
+                            logging.error(f"✗ ERRO 400: Requisição inválida para exame {i} de {nome_arquivo} (tag_identifier: {payload.get('FileName')}).")
+                            logging.error(f"  Possíveis causas: tag_identifier não encontrado, procedimento já liberado, ou conteúdo inválido.")
+                            logging.error(f"  Resposta: {response.text[:500]}")
+                        elif response.status_code == 500:
+                            logging.error(f"✗ ERRO 500: Erro interno do servidor ao processar exame {i} de {nome_arquivo}.")
+                            logging.error(f"  Resposta: {response.text[:500]}")
+                        elif response.status_code in (401, 403):
+                            logging.error(f"✗ ERRO {response.status_code}: Falha de autenticação para exame {i} de {nome_arquivo}.")
+                            logging.error(f"  Verifique o FRANCHISE_CREDENTIAL_ID: {FRANCHISE_CREDENTIAL_ID}")
+                            logging.error(f"  Resposta: {response.text[:500]}")
+                        elif response.status_code in (502, 503):
+                            logging.error(f"✗ ERRO {response.status_code}: Servidor indisponível para exame {i} de {nome_arquivo}.")
+                            logging.error(f"  O servidor pode estar fora do ar ou em manutenção. Nova tentativa em {CHECK_FILES_INTERVAL}s.")
                         else:
-                            logging.error(f"✗ Webhook recusou exame {i} de {nome_arquivo}: Status {response.status_code}")
-                            logging.error(f"  Resposta: {response.text}")
-                            logging.error(f"  Payload enviado: {json.dumps(payload)}")
+                            logging.error(f"✗ Webhook recusou exame {i} de {nome_arquivo}: Status HTTP {response.status_code}")
+                            logging.error(f"  Resposta: {response.text[:500]}")
+                    except requests.exceptions.ConnectionError as e:
+                        logging.error(f"✗ ERRO DE CONEXÃO: Não foi possível conectar ao servidor para exame {i} de {nome_arquivo}.")
+                        logging.error(f"  URL: {WEBHOOK_URL}")
+                        logging.error(f"  Detalhe: {e}")
+                    except requests.exceptions.Timeout as e:
+                        logging.error(f"✗ TIMEOUT: O servidor não respondeu a tempo para exame {i} de {nome_arquivo} (30s).")
+                        logging.error(f"  URL: {WEBHOOK_URL}")
                     except requests.exceptions.RequestException as e:
-                        logging.error(f"✗ Erro de conexão ao enviar exame {i}: {e}")
+                        logging.error(f"✗ ERRO DE REDE ao enviar exame {i} de {nome_arquivo}: {type(e).__name__}: {e}")
+                        logging.error(f"  URL: {WEBHOOK_URL}")
                 
                 # Move o arquivo original para enviados
                 shutil.move(caminho_origem, caminho_destino)
                 logging.info(f"Arquivo movido para enviados: {nome_arquivo}")
                 
+        except FileNotFoundError as e:
+            logging.error(f"Erro no monitor de envio: diretório não encontrado: {e}")
+            erros_consecutivos += 1
+        except PermissionError as e:
+            logging.error(f"Erro no monitor de envio: permissão negada: {e}")
+            erros_consecutivos += 1
+        except OSError as e:
+            logging.error(f"Erro de sistema no monitor de envio: {type(e).__name__}: {e}")
+            erros_consecutivos += 1
         except Exception as e:
-            logging.error(f"Erro na thread de envio: {e}")
-        
+            logging.error(f"Erro inesperado no monitor de envio: {type(e).__name__}: {e}")
+            erros_consecutivos += 1
+
+        if erros_consecutivos >= MAX_ERROS_CONSECUTIVOS:
+            logging.critical(f"ALERTA: {erros_consecutivos} erros consecutivos no monitor de envio!")
+            logging.critical(f"  O serviço continua rodando, mas pode haver um problema persistente.")
+            logging.critical(f"  Verifique: (1) Permissões das pastas (2) Espaço em disco (3) Conexão de rede")
+            erros_consecutivos = 0  # reseta para não floodar o log
+
         time.sleep(CHECK_FILES_INTERVAL)
 
 
@@ -327,33 +448,58 @@ def main():
     """
     Loop principal que lê dados da porta serial e salva os exames.
     """
+    logging.info("=" * 60)
+    logging.info("Analisador Coagmaster - Serviço de Integração")
+    logging.info(f"Data/Hora de início: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logging.info(f"Porta Serial: {COM_PORT} | Baud Rate: {BAUD_RATE}")
+    logging.info(f"Webhook: {WEBHOOK_URL}")
+    logging.info(f"Pastas: gerados={GERADOS_DIR} | enviados={ENVIADOS_DIR}")
+    logging.info("=" * 60)
+    
     thread_envio = Thread(target=task_sender_to_webhook, daemon=True)
     thread_envio.start()
+    logging.info("Thread de envio iniciada.")
+
+    ser = None
+    tentativas_porta = 0
+    MAX_TENTATIVAS_PORTA = 5
     
-    try:
-        ser = serial.Serial(COM_PORT, BAUD_RATE, timeout=0.1)
-        logging.info(f"Conectado à porta {COM_PORT}. Escutando serial...")
-    except Exception as e:
-        logging.critical(f"Falha ao abrir porta serial: {e}")
+    while ser is None and tentativas_porta < MAX_TENTATIVAS_PORTA:
+        try:
+            ser = serial.Serial(COM_PORT, BAUD_RATE, timeout=0.1)
+            logging.info(f"✓ Conectado à porta {COM_PORT} com sucesso.")
+        except serial.SerialException as e:
+            tentativas_porta += 1
+            logging.error(f"✗ Tentativa {tentativas_porta}/{MAX_TENTATIVAS_PORTA}: Falha ao abrir porta serial {COM_PORT}: {e}")
+            if tentativas_porta < MAX_TENTATIVAS_PORTA:
+                logging.info(f"  Nova tentativa em 10 segundos...")
+                time.sleep(10)
+        except Exception as e:
+            logging.critical(f"✗ Erro inesperado ao abrir porta serial: {type(e).__name__}: {e}")
+            return
+    
+    if ser is None:
+        logging.critical(f"✗ NÃO FOI POSSÍVEL CONECTAR à porta {COM_PORT} após {MAX_TENTATIVAS_PORTA} tentativas.")
+        logging.critical(f"  Verifique: (1) Cabo USB conectado? (2) Porta COM correta? (3) Driver instalado?")
+        logging.critical(f"  O serviço NÃO será iniciado. Corrija o problema e reinicie.")
         return
-    
+
     buffer = ""
+    bytes_recebidos = 0
+    exames_processados = 0
+    ultimo_log_status = time.time()
+    INTERVALO_LOG_STATUS = 300  # log de status a cada 5 minutos
+
+    logging.info("Escutando dados da porta serial...")
     
     while True:
         try:
             if ser.in_waiting > 0:
-                buffer += ser.read(ser.in_waiting).decode('utf-8', errors='ignore')
-            
-            # Detecta fim de exame: linha em branco ou padrão de separador
-            # O Coagmaster envia blocos de texto terminados por linhas em branco
-            # ou pelo padrão ******************************\n\n
-            
-            # Verifica se há um exame completo no buffer
-            # Um exame é considerado completo quando:
-            # 1. Contém o padrão (NNNN) - número do exame
-            # 2. Seguido por linhas em branco ou novo cabeçalho PuTTY
-            
-            # Padrão de fim de exame: linha com asteriscos seguida de linhas em branco
+                data = ser.read(ser.in_waiting)
+                bytes_recebidos += len(data)
+                buffer += data.decode('utf-8', errors='ignore')
+
+            # Detecta fim de exame: linha com asteriscos seguida de linhas em branco
             # ou cabeçalho PuTTY
             exam_end_pattern = r'(\*{30,}\s*\n\s*\n)'
             putty_header = '=~=~=~=~=~=~=~=~=~=~=~='
@@ -375,10 +521,14 @@ def main():
                     filename = f"coagmaster_{timestamp}.log"
                     file_path = os.path.join(GERADOS_DIR, filename)
                     
-                    with open(file_path, "w", encoding="utf-8", newline='') as f:
-                        f.write(exam_content)
-                    
-                    logging.info(f"Exame salvo em disco: {filename}")
+                    try:
+                        with open(file_path, "w", encoding="utf-8", newline='') as f:
+                            f.write(exam_content)
+                        exames_processados += 1
+                        logging.info(f"✓ Exame salvo: {filename} ({len(exam_content)} bytes)")
+                    except OSError as e:
+                        logging.error(f"✗ Erro ao salvar arquivo {filename}: {e} (espaço em disco?)")
+                        continue
                     
                 elif putty_match > 0:
                     # Novo cabeçalho PuTTY indica fim do exame anterior
@@ -390,21 +540,52 @@ def main():
                         filename = f"coagmaster_{timestamp}.log"
                         file_path = os.path.join(GERADOS_DIR, filename)
                         
-                        with open(file_path, "w", encoding="utf-8", newline='') as f:
-                            f.write(exam_content)
-                        
-                        logging.info(f"Exame salvo em disco: {filename}")
-            
+                        try:
+                            with open(file_path, "w", encoding="utf-8", newline='') as f:
+                                f.write(exam_content)
+                            exames_processados += 1
+                            logging.info(f"✓ Exame salvo: {filename} ({len(exam_content)} bytes)")
+                        except OSError as e:
+                            logging.error(f"✗ Erro ao salvar arquivo {filename}: {e}")
+                            continue
+
+            # Log de status periódico (a cada 5 min)
+            agora = time.time()
+            if agora - ultimo_log_status >= INTERVALO_LOG_STATUS:
+                logging.info(f"[STATUS] Uptime: {int(agora - ultimo_log_status)}s | "
+                           f"Exames processados: {exames_processados} | "
+                           f"Bytes recebidos: {bytes_recebidos} | "
+                           f"Buffer atual: {len(buffer)} bytes | "
+                           f"Porta aberta: {ser.is_open if ser else 'N/A'}")
+                ultimo_log_status = agora
+
             time.sleep(READ_INTERVAL)
-            
+
         except KeyboardInterrupt:
-            logging.info("Finalizando...")
-            ser.close()
+            logging.info("Finalizando serviço (KeyboardInterrupt)...")
             break
+        except serial.SerialException as e:
+            logging.error(f"✗ Erro na porta serial: {e}")
+            logging.info("  Tentando reconectar em 5 segundos...")
+            try:
+                ser.close()
+            except:
+                pass
+            time.sleep(5)
+            try:
+                ser = serial.Serial(COM_PORT, BAUD_RATE, timeout=0.1)
+                logging.info("  Porta serial reconectada com sucesso.")
+            except Exception as recon_err:
+                logging.error(f"  Falha ao reconectar: {recon_err}")
+                time.sleep(10)
         except Exception as e:
-            logging.exception(f"Erro no loop serial: {e}")
+            logging.exception(f"✗ Erro inesperado no loop serial: {type(e).__name__}: {e}")
             time.sleep(1)
 
+    if ser and ser.is_open:
+        ser.close()
+        logging.info("Porta serial fechada.")
+    logging.info(f"Serviço finalizado. Total de exames processados: {exames_processados}")
 
 if __name__ == "__main__":
     main()
