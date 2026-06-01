@@ -14,7 +14,7 @@ COM_PORT = 'COM4'
 BAUD_RATE = 115200
 
 # ID da franquia configurado no banco de dados
-FRANCHISE_CREDENTIAL_ID = '85361c80-9688-47e9-8cb3-ed838a9b1832'
+FRANCHISE_CREDENTIAL_ID = 'f47d9a16-df12-4091-b759-79648d13e371'
 
 # Webhook do Coagmaster
 # Local: http://localhost:8039/api/integration/coagmaster
@@ -23,6 +23,8 @@ WEBHOOK_URL = f'https://apoio.internal.vidaexame.com/api/integration/coagmaster?
 
 READ_INTERVAL = 0.1
 CHECK_FILES_INTERVAL = 5
+MAX_RETRY = 5
+RETRY_INTERVAL = 60  # segundos entre tentativas de reenvio (1 minuto)
 # =================================================
 
 # Pastas de trabalho – na Área de Trabalho
@@ -30,12 +32,14 @@ DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
 BASE_DIR = os.path.join(DESKTOP, "AnalisadorCoagmaster")
 GERADOS_DIR = os.path.join(BASE_DIR, "gerados")
 ENVIADOS_DIR = os.path.join(BASE_DIR, "enviados")
+REQUISICOES_NAO_ENVIADAS_DIR = os.path.join(BASE_DIR, "requisições não enviadas")
 LOG_FILE = os.path.join(BASE_DIR, "analisador_coagmaster.log")
 # =================================================
 
 # Garantir que as pastas existam
 os.makedirs(GERADOS_DIR, exist_ok=True)
 os.makedirs(ENVIADOS_DIR, exist_ok=True)
+os.makedirs(REQUISICOES_NAO_ENVIADAS_DIR, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -283,6 +287,73 @@ def parse_coagmaster_exam(text: str) -> dict[str, str]:
     return result
 
 
+def _enviar_payload_webhook(payload: dict, nome_arquivo: str, tag_identifier: str, exame_num: int = 0) -> bool:
+    """
+    Envia um payload para o webhook com até MAX_RETRY tentativas.
+    Retorna True se o envio foi bem-sucedido, False caso contrário.
+    """
+    headers = {'Content-Type': 'application/json'}
+    prefixo = f"Exame {exame_num} de {nome_arquivo}" if exame_num else nome_arquivo
+
+    for tentativa in range(1, MAX_RETRY + 1):
+        try:
+            logging.info(f"Enviando {prefixo} (tag_identifier: {tag_identifier}) para o webhook... [Tentativa {tentativa}/{MAX_RETRY}]")
+            response = requests.post(
+                WEBHOOK_URL,
+                json=payload,
+                headers=headers,
+                timeout=30
+            )
+
+            if response.status_code in (200, 201):
+                logging.info(f"✓ Sucesso ({response.status_code}): {prefixo} enviado ao Webhook.")
+                try:
+                    resp_json = response.json()
+                    msg = resp_json.get('message', 'OK')
+                    logging.info(f"  Mensagem: {msg}")
+                except:
+                    pass
+                return True
+            elif response.status_code == 404:
+                logging.error(f"✗ ERRO 404: Endpoint não encontrado para {prefixo}.")
+                logging.error(f"  Verifique se a URL está correta: {WEBHOOK_URL}")
+                logging.error(f"  Resposta: {response.text[:500]}")
+            elif response.status_code == 400:
+                logging.error(f"✗ ERRO 400: Requisição inválida para {prefixo} (tag_identifier: {tag_identifier}).")
+                logging.error(f"  Possíveis causas: tag_identifier não encontrado, procedimento já liberado, ou conteúdo inválido.")
+                logging.error(f"  Resposta: {response.text[:500]}")
+            elif response.status_code == 500:
+                logging.error(f"✗ ERRO 500: Erro interno do servidor ao processar {prefixo}.")
+                logging.error(f"  Resposta: {response.text[:500]}")
+            elif response.status_code in (401, 403):
+                logging.error(f"✗ ERRO {response.status_code}: Falha de autenticação para {prefixo}.")
+                logging.error(f"  Verifique o FRANCHISE_CREDENTIAL_ID: {FRANCHISE_CREDENTIAL_ID}")
+                logging.error(f"  Resposta: {response.text[:500]}")
+            elif response.status_code in (502, 503):
+                logging.error(f"✗ ERRO {response.status_code}: Servidor indisponível para {prefixo}.")
+                logging.error(f"  O servidor pode estar fora do ar ou em manutenção.")
+            else:
+                logging.error(f"✗ Webhook recusou {prefixo}: Status HTTP {response.status_code}")
+                logging.error(f"  Resposta: {response.text[:500]}")
+
+        except requests.exceptions.ConnectionError as e:
+            logging.error(f"✗ ERRO DE CONEXÃO: Não foi possível conectar ao servidor para {prefixo}.")
+            logging.error(f"  URL: {WEBHOOK_URL}")
+            logging.error(f"  Detalhe: {e}")
+        except requests.exceptions.Timeout as e:
+            logging.error(f"✗ TIMEOUT: O servidor não respondeu a tempo para {prefixo} (30s).")
+            logging.error(f"  URL: {WEBHOOK_URL}")
+        except requests.exceptions.RequestException as e:
+            logging.error(f"✗ ERRO DE REDE ao enviar {prefixo}: {type(e).__name__}: {e}")
+            logging.error(f"  URL: {WEBHOOK_URL}")
+
+        if tentativa < MAX_RETRY:
+            logging.warning(f"  Tentativa {tentativa}/{MAX_RETRY} falhou. Nova tentativa em {RETRY_INTERVAL}s...")
+            time.sleep(RETRY_INTERVAL)
+
+    return False
+
+
 def task_sender_to_webhook():
     """
     Thread em background que monitora a pasta GERADOS_DIR e envia
@@ -291,6 +362,7 @@ def task_sender_to_webhook():
     logging.info("Iniciando monitor de envio para Webhook...")
     logging.info(f"URL do Webhook: {WEBHOOK_URL}")
     logging.info(f"Verificando arquivos a cada {CHECK_FILES_INTERVAL}s na pasta: {GERADOS_DIR}")
+    logging.info(f"Reenvio: até {MAX_RETRY} tentativas com intervalo de {RETRY_INTERVAL}s")
     
     erros_consecutivos = 0
     MAX_ERROS_CONSECUTIVOS = 10
@@ -306,6 +378,7 @@ def task_sender_to_webhook():
             for nome_arquivo in arquivos:
                 caminho_origem = os.path.join(GERADOS_DIR, nome_arquivo)
                 caminho_destino = os.path.join(ENVIADOS_DIR, nome_arquivo)
+                caminho_nao_enviado = os.path.join(REQUISICOES_NAO_ENVIADAS_DIR, nome_arquivo)
 
                 # Lê o arquivo de log
                 try:
@@ -337,6 +410,7 @@ def task_sender_to_webhook():
                 logging.info(f"Encontrados {len(exames)} exame(s) em {nome_arquivo}")
                 
                 # Processa cada exame
+                todos_enviados = True
                 for i, exame_texto in enumerate(exames, 1):
                     # Parseia o exame
                     payload = parse_coagmaster_exam(exame_texto)
@@ -349,6 +423,7 @@ def task_sender_to_webhook():
                     if not payload.get('FileName'):
                         logging.error(f"✗ Exame {i} de {nome_arquivo}: FileName (tag_identifier) vazio — impossível identificar o procedimento.")
                         logging.error(f"  ID do paciente não encontrado no exame. Verifique se o equipamento está configurado para enviar o código de barras.")
+                        todos_enviados = False
                         continue
                     
                     # Salva JSON de referência
@@ -366,61 +441,20 @@ def task_sender_to_webhook():
                     except Exception as e:
                         logging.warning(f"Erro ao salvar JSON de debug para exame {i}: {e}")
                     
-                    # Envia para o webhook
-                    headers = {'Content-Type': 'application/json'}
+                    # Tenta enviar com retry
+                    enviado = _enviar_payload_webhook(payload, nome_arquivo, payload.get('FileName', ''), i)
                     
-                    try:
-                        logging.info(f"Enviando exame {i} de {nome_arquivo} (tag_identifier: {payload.get('FileName')}) para o webhook...")
-                        response = requests.post(
-                            WEBHOOK_URL,
-                            json=payload,
-                            headers=headers,
-                            timeout=30
-                        )
-                        
-                        if response.status_code in (200, 201):
-                            logging.info(f"✓ Sucesso ({response.status_code}): Exame {i} de {nome_arquivo} enviado ao Webhook.")
-                            try:
-                                resp_json = response.json()
-                                msg = resp_json.get('message', 'OK')
-                                logging.info(f"  Mensagem: {msg}")
-                            except:
-                                pass
-                        elif response.status_code == 404:
-                            logging.error(f"✗ ERRO 404: Endpoint não encontrado para exame {i} de {nome_arquivo}.")
-                            logging.error(f"  Verifique se a URL está correta: {WEBHOOK_URL}")
-                            logging.error(f"  Resposta: {response.text[:500]}")
-                        elif response.status_code == 400:
-                            logging.error(f"✗ ERRO 400: Requisição inválida para exame {i} de {nome_arquivo} (tag_identifier: {payload.get('FileName')}).")
-                            logging.error(f"  Possíveis causas: tag_identifier não encontrado, procedimento já liberado, ou conteúdo inválido.")
-                            logging.error(f"  Resposta: {response.text[:500]}")
-                        elif response.status_code == 500:
-                            logging.error(f"✗ ERRO 500: Erro interno do servidor ao processar exame {i} de {nome_arquivo}.")
-                            logging.error(f"  Resposta: {response.text[:500]}")
-                        elif response.status_code in (401, 403):
-                            logging.error(f"✗ ERRO {response.status_code}: Falha de autenticação para exame {i} de {nome_arquivo}.")
-                            logging.error(f"  Verifique o FRANCHISE_CREDENTIAL_ID: {FRANCHISE_CREDENTIAL_ID}")
-                            logging.error(f"  Resposta: {response.text[:500]}")
-                        elif response.status_code in (502, 503):
-                            logging.error(f"✗ ERRO {response.status_code}: Servidor indisponível para exame {i} de {nome_arquivo}.")
-                            logging.error(f"  O servidor pode estar fora do ar ou em manutenção. Nova tentativa em {CHECK_FILES_INTERVAL}s.")
-                        else:
-                            logging.error(f"✗ Webhook recusou exame {i} de {nome_arquivo}: Status HTTP {response.status_code}")
-                            logging.error(f"  Resposta: {response.text[:500]}")
-                    except requests.exceptions.ConnectionError as e:
-                        logging.error(f"✗ ERRO DE CONEXÃO: Não foi possível conectar ao servidor para exame {i} de {nome_arquivo}.")
-                        logging.error(f"  URL: {WEBHOOK_URL}")
-                        logging.error(f"  Detalhe: {e}")
-                    except requests.exceptions.Timeout as e:
-                        logging.error(f"✗ TIMEOUT: O servidor não respondeu a tempo para exame {i} de {nome_arquivo} (30s).")
-                        logging.error(f"  URL: {WEBHOOK_URL}")
-                    except requests.exceptions.RequestException as e:
-                        logging.error(f"✗ ERRO DE REDE ao enviar exame {i} de {nome_arquivo}: {type(e).__name__}: {e}")
-                        logging.error(f"  URL: {WEBHOOK_URL}")
+                    if not enviado:
+                        todos_enviados = False
                 
-                # Move o arquivo original para enviados
-                shutil.move(caminho_origem, caminho_destino)
-                logging.info(f"Arquivo movido para enviados: {nome_arquivo}")
+                # Move o arquivo original: para enviados se todos foram OK, senão para não enviados
+                if todos_enviados:
+                    shutil.move(caminho_origem, caminho_destino)
+                    logging.info(f"Arquivo movido para enviados: {nome_arquivo}")
+                else:
+                    logging.error(f"✗ Falha definitiva: {nome_arquivo} — um ou mais exames não foram enviados após {MAX_RETRY} tentativas.")
+                    logging.error(f"  Movendo para '{REQUISICOES_NAO_ENVIADAS_DIR}'.")
+                    shutil.move(caminho_origem, caminho_nao_enviado)
                 
         except FileNotFoundError as e:
             logging.error(f"Erro no monitor de envio: diretório não encontrado: {e}")
@@ -453,7 +487,8 @@ def main():
     logging.info(f"Data/Hora de início: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logging.info(f"Porta Serial: {COM_PORT} | Baud Rate: {BAUD_RATE}")
     logging.info(f"Webhook: {WEBHOOK_URL}")
-    logging.info(f"Pastas: gerados={GERADOS_DIR} | enviados={ENVIADOS_DIR}")
+    logging.info(f"Pastas: gerados={GERADOS_DIR} | enviados={ENVIADOS_DIR} | não enviados={REQUISICOES_NAO_ENVIADAS_DIR}")
+    logging.info(f"Reenvio: até {MAX_RETRY} tentativas com intervalo de {RETRY_INTERVAL}s")
     logging.info("=" * 60)
     
     thread_envio = Thread(target=task_sender_to_webhook, daemon=True)
@@ -518,7 +553,7 @@ def main():
                     
                     # Salva o exame
                     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                    filename = f"coagmaster_{timestamp}.log"
+                    filename = f"exame_{timestamp}.log"
                     file_path = os.path.join(GERADOS_DIR, filename)
                     
                     try:
@@ -537,7 +572,7 @@ def main():
                     
                     if exam_content.strip():
                         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                        filename = f"coagmaster_{timestamp}.log"
+                        filename = f"exame_{timestamp}.log"
                         file_path = os.path.join(GERADOS_DIR, filename)
                         
                         try:
