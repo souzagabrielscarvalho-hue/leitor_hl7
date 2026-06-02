@@ -138,6 +138,7 @@ def parse_hl7_to_txt(hl7_message: str) -> str:
         # Nota: O BH5100 envia percentuais SEM sufixo '%' (ex: LYM, NEU) conforme manual UT-5160
         #       e absolutos com sufixo '#' (ex: LYM#, NEU#)
         #       Se não receber percentuais, eles serão calculados: Percent = (Absolute / WBC) * 100
+        #       NRBC, ALY e LIC foram removidos — não são enviados ao webhook
         MAPEAMENTO = {
             'WBC':  'WBC',
             'NEU#': 'NE',
@@ -155,13 +156,6 @@ def parse_hl7_to_txt(hl7_message: str) -> str:
             'BASO#':'BA',
             'BASO': 'BA_Percent',
             'BASO%':'BA_Percent',
-            'NRBC#':'NRBC',
-            'NRBC%':'NRBC_Percent',
-            'NRBC': 'NRBC_Percent',
-            'ALY#': 'ALY',
-            'ALY%': 'ALY_Percent',
-            'LIC#': 'LIC',
-            'LIC%': 'LIC_Percent',
             'RBC':  'RBC',
             'HGB':  'HGB',
             'HCT':  'HCT',
@@ -208,8 +202,14 @@ def parse_hl7_to_txt(hl7_message: str) -> str:
             flag = abnormal_flag if abnormal_flag and abnormal_flag != 'N' else ''
             resultados[nome] = (value, flag)
 
+        # Salvar WBC original (usado no cálculo de percentuais)
+        # Os valores absolutos (NE, LY, MO, EO, BA) estão em x10³/µL, mesma unidade do WBC original
+        wbc_original = resultados.get('WBC')
+
         # Calcular percentuais ausentes a partir dos absolutos e WBC
         # Fórmula: Percent = (Absolute / WBC) * 100
+        # IMPORTANTE: cálculo feito ANTES da multiplicação por 1000, pois WBC e absolutos
+        # estão na mesma unidade (x10³/µL)
         def calcular_percentual(valor_absoluto_com_flag: str, wbc_com_flag: str) -> tuple:
             """Calcula percentual a partir de valor absoluto e WBC. Retorna (valor, flag)."""
             try:
@@ -233,39 +233,63 @@ def parse_hl7_to_txt(hl7_message: str) -> str:
                     logging.warning(f"WBC = 0, não é possível calcular percentual para valor absoluto {valor_abs}")
                     return None
                 
-                percentual = round((abs_float / wbc_float) * 100, 2)
+                percentual = (abs_float / wbc_float) * 100
                 return (str(percentual), flag_origem)
             except (ValueError, AttributeError, TypeError) as e:
                 logging.debug(f"Erro ao calcular percentual para {valor_absoluto_com_flag} / {wbc_com_flag}: {e}")
                 return None
         
         # Verificar e calcular LY_Percent se não foi recebido
-        if 'LY_Percent' not in resultados and 'LY' in resultados and 'WBC' in resultados:
-            resultado = calcular_percentual(resultados['LY'], resultados['WBC'])
+        if 'LY_Percent' not in resultados and 'LY' in resultados and wbc_original:
+            resultado = calcular_percentual(resultados['LY'], wbc_original)
             if resultado:
                 resultados['LY_Percent'] = resultado
                 logging.info(f"LY_Percent calculado (não foi recebido do equipamento): {resultado[0]}{resultado[1]}")
         
         # Verificar e calcular MO_Percent se não foi recebido
-        if 'MO_Percent' not in resultados and 'MO' in resultados and 'WBC' in resultados:
-            resultado = calcular_percentual(resultados['MO'], resultados['WBC'])
+        if 'MO_Percent' not in resultados and 'MO' in resultados and wbc_original:
+            resultado = calcular_percentual(resultados['MO'], wbc_original)
             if resultado:
                 resultados['MO_Percent'] = resultado
                 logging.info(f"MO_Percent calculado (não foi recebido do equipamento): {resultado[0]}{resultado[1]}")
         
         # Verificar e calcular EO_Percent se não foi recebido
-        if 'EO_Percent' not in resultados and 'EO' in resultados and 'WBC' in resultados:
-            resultado = calcular_percentual(resultados['EO'], resultados['WBC'])
+        if 'EO_Percent' not in resultados and 'EO' in resultados and wbc_original:
+            resultado = calcular_percentual(resultados['EO'], wbc_original)
             if resultado:
                 resultados['EO_Percent'] = resultado
                 logging.info(f"EO_Percent calculado (não foi recebido do equipamento): {resultado[0]}{resultado[1]}")
         
         # Verificar e calcular BA_Percent se não foi recebido
-        if 'BA_Percent' not in resultados and 'BA' in resultados and 'WBC' in resultados:
-            resultado = calcular_percentual(resultados['BA'], resultados['WBC'])
+        if 'BA_Percent' not in resultados and 'BA' in resultados and wbc_original:
+            resultado = calcular_percentual(resultados['BA'], wbc_original)
             if resultado:
                 resultados['BA_Percent'] = resultado
                 logging.info(f"BA_Percent calculado (não foi recebido do equipamento): {resultado[0]}{resultado[1]}")
+
+        # Multiplicar WBC e PLT por 1000 (equipamento envia em x10³/µL, webhook espera /µL)
+        # IMPORTANTE: feito APÓS o cálculo de percentuais, pois WBC e absolutos
+        # estão na mesma unidade (x10³/µL) antes da multiplicação
+        for campo_multiplicar in ('WBC', 'PLT'):
+            if campo_multiplicar in resultados:
+                valor_original, flag_campo = resultados[campo_multiplicar]
+                try:
+                    valor_float = float(valor_original)
+                    valor_multiplicado = str(round(valor_float * 1000, 4))
+                    resultados[campo_multiplicar] = (valor_multiplicado, flag_campo)
+                    logging.info(f"{campo_multiplicar} multiplicado por 1000: {valor_original} → {valor_multiplicado}")
+                except (ValueError, TypeError) as e:
+                    logging.warning(f"Não foi possível multiplicar {campo_multiplicar} por 1000: valor='{valor_original}', erro={e}")
+
+        # Arredondar todos os valores para 1 casa decimal (após todos os cálculos)
+        for nome in resultados:
+            valor, flag = resultados[nome]
+            try:
+                valor_float = float(valor)
+                valor_arredondado = str(round(valor_float, 1))
+                resultados[nome] = (valor_arredondado, flag)
+            except (ValueError, TypeError):
+                pass  # mantém o valor original se não for numérico
 
         if not resultados:
             return ""
@@ -274,7 +298,6 @@ def parse_hl7_to_txt(hl7_message: str) -> str:
         ORDEM = [
             'WBC', 'NE', 'NE_Percent', 'LY', 'LY_Percent',
             'MO', 'MO_Percent', 'EO', 'EO_Percent', 'BA', 'BA_Percent',
-            'NRBC', 'NRBC_Percent', 'ALY', 'ALY_Percent', 'LIC', 'LIC_Percent',
             'RBC', 'HGB', 'HCT', 'MCV', 'MCH', 'MCHC', 'RDW_CV', 'RDW_SD',
             'PLT', 'PCT', 'MPV', 'PDW', 'P_LCR', 'P_LCC',
         ]
@@ -300,6 +323,7 @@ def parse_hl7_to_dict(hl7_message: str) -> dict:
         # Nota: O BH5100 envia percentuais SEM sufixo '%' (ex: LYM, NEU) conforme manual UT-5160
         #       e absolutos com sufixo '#' (ex: LYM#, NEU#)
         #       Se não receber percentuais, eles serão calculados: Percent = (Absolute / WBC) * 100
+        #       NRBC, ALY e LIC foram removidos — não são enviados ao webhook
         MAPEAMENTO = {
             'WBC':  'WBC',
             'NEU#': 'NE',
@@ -317,13 +341,6 @@ def parse_hl7_to_dict(hl7_message: str) -> dict:
             'BASO#':'BA',
             'BASO': 'BA_Percent',
             'BASO%':'BA_Percent',
-            'NRBC#':'NRBC',
-            'NRBC%':'NRBC_Percent',
-            'NRBC': 'NRBC_Percent',
-            'ALY#': 'ALY',
-            'ALY%': 'ALY_Percent',
-            'LIC#': 'LIC',
-            'LIC%': 'LIC_Percent',
             'RBC':  'RBC',
             'HGB':  'HGB',
             'HCT':  'HCT',
@@ -366,8 +383,14 @@ def parse_hl7_to_dict(hl7_message: str) -> dict:
             flag = abnormal_flag if abnormal_flag and abnormal_flag != 'N' else ''
             resultados[nome] = f"{value}{flag}"
 
+        # Salvar WBC original (usado no cálculo de percentuais)
+        # Os valores absolutos (NE, LY, MO, EO, BA) estão em x10³/µL, mesma unidade do WBC original
+        wbc_original = resultados.get('WBC')
+
         # Calcular percentuais ausentes a partir dos absolutos e WBC
         # Fórmula: Percent = (Absolute / WBC) * 100
+        # IMPORTANTE: cálculo feito ANTES da multiplicação por 1000, pois WBC e absolutos
+        # estão na mesma unidade (x10³/µL)
         def calcular_percentual_dict(valor_absoluto_com_flag: str, wbc_com_flag: str) -> str:
             """Calcula percentual a partir de valor absoluto e WBC. Retorna valor com flag."""
             try:
@@ -391,39 +414,75 @@ def parse_hl7_to_dict(hl7_message: str) -> dict:
                     logging.warning(f"WBC = 0, não é possível calcular percentual para valor absoluto {valor_abs}")
                     return None
                 
-                percentual = round((abs_float / wbc_float) * 100, 2)
+                percentual = (abs_float / wbc_float) * 100
                 return f"{percentual}{flag_origem}"
             except (ValueError, AttributeError, TypeError) as e:
                 logging.debug(f"Erro ao calcular percentual para {valor_absoluto_com_flag} / {wbc_com_flag}: {e}")
                 return None
         
         # Verificar e calcular LY_Percent se não foi recebido
-        if 'LY_Percent' not in resultados and 'LY' in resultados and 'WBC' in resultados:
-            resultado = calcular_percentual_dict(resultados['LY'], resultados['WBC'])
+        if 'LY_Percent' not in resultados and 'LY' in resultados and wbc_original:
+            resultado = calcular_percentual_dict(resultados['LY'], wbc_original)
             if resultado:
                 resultados['LY_Percent'] = resultado
                 logging.info(f"LY_Percent calculado (não foi recebido do equipamento): {resultado}")
         
         # Verificar e calcular MO_Percent se não foi recebido
-        if 'MO_Percent' not in resultados and 'MO' in resultados and 'WBC' in resultados:
-            resultado = calcular_percentual_dict(resultados['MO'], resultados['WBC'])
+        if 'MO_Percent' not in resultados and 'MO' in resultados and wbc_original:
+            resultado = calcular_percentual_dict(resultados['MO'], wbc_original)
             if resultado:
                 resultados['MO_Percent'] = resultado
                 logging.info(f"MO_Percent calculado (não foi recebido do equipamento): {resultado}")
         
         # Verificar e calcular EO_Percent se não foi recebido
-        if 'EO_Percent' not in resultados and 'EO' in resultados and 'WBC' in resultados:
-            resultado = calcular_percentual_dict(resultados['EO'], resultados['WBC'])
+        if 'EO_Percent' not in resultados and 'EO' in resultados and wbc_original:
+            resultado = calcular_percentual_dict(resultados['EO'], wbc_original)
             if resultado:
                 resultados['EO_Percent'] = resultado
                 logging.info(f"EO_Percent calculado (não foi recebido do equipamento): {resultado}")
         
         # Verificar e calcular BA_Percent se não foi recebido
-        if 'BA_Percent' not in resultados and 'BA' in resultados and 'WBC' in resultados:
-            resultado = calcular_percentual_dict(resultados['BA'], resultados['WBC'])
+        if 'BA_Percent' not in resultados and 'BA' in resultados and wbc_original:
+            resultado = calcular_percentual_dict(resultados['BA'], wbc_original)
             if resultado:
                 resultados['BA_Percent'] = resultado
                 logging.info(f"BA_Percent calculado (não foi recebido do equipamento): {resultado}")
+
+        # Multiplicar WBC e PLT por 1000 (equipamento envia em x10³/µL, webhook espera /µL)
+        # IMPORTANTE: feito APÓS o cálculo de percentuais, pois WBC e absolutos
+        # estão na mesma unidade (x10³/µL) antes da multiplicação
+        for campo_multiplicar in ('WBC', 'PLT'):
+            if campo_multiplicar in resultados:
+                valor_com_flag = resultados[campo_multiplicar]
+                # Separar flag do valor
+                flag_campo = ''
+                valor_str = valor_com_flag
+                if valor_str and valor_str[-1] in ('H', 'L'):
+                    flag_campo = valor_str[-1]
+                    valor_str = valor_str[:-1]
+                try:
+                    valor_float = float(valor_str)
+                    valor_multiplicado = str(round(valor_float * 1000, 4))
+                    resultados[campo_multiplicar] = f"{valor_multiplicado}{flag_campo}"
+                    logging.info(f"{campo_multiplicar} multiplicado por 1000: {valor_str} → {valor_multiplicado}")
+                except (ValueError, TypeError) as e:
+                    logging.warning(f"Não foi possível multiplicar {campo_multiplicar} por 1000: valor='{valor_str}', erro={e}")
+
+        # Arredondar todos os valores para 1 casa decimal (após todos os cálculos)
+        for nome in resultados:
+            valor_com_flag = resultados[nome]
+            # Separar flag do valor
+            flag_campo = ''
+            valor_str = valor_com_flag
+            if valor_str and valor_str[-1] in ('H', 'L'):
+                flag_campo = valor_str[-1]
+                valor_str = valor_str[:-1]
+            try:
+                valor_float = float(valor_str)
+                valor_arredondado = str(round(valor_float, 1))
+                resultados[nome] = f"{valor_arredondado}{flag_campo}"
+            except (ValueError, TypeError):
+                pass  # mantém o valor original se não for numérico
 
         return resultados
     except Exception as e:

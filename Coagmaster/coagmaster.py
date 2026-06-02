@@ -34,7 +34,7 @@ GERADOS_DIR = os.path.join(BASE_DIR, "gerados")
 ENVIADOS_DIR = os.path.join(BASE_DIR, "enviados")
 REQUISICOES_NAO_ENVIADAS_DIR = os.path.join(BASE_DIR, "requisições não enviadas")
 LOG_FILE = os.path.join(BASE_DIR, "analisador_coagmaster.log")
-# =================================================
+# ==================================================
 
 # Garantir que as pastas existam
 os.makedirs(GERADOS_DIR, exist_ok=True)
@@ -217,23 +217,29 @@ def parse_coagmaster_exam(text: str) -> dict[str, str]:
         if match:
             result['Relation'] = match.group(1).replace(',', '.')
         
-        # Porcentagem: XX,X%
-        # IMPORTANTE: Capturar apenas a linha que contém SOMENTE a porcentagem
-        # (para evitar capturar "100%" do CONTROLE)
+        # Porcentagem: XX,X% ou %: XX,X%
+        # IMPORTANTE: Capturar a porcentagem do resultado, não a do CONTROLE
+        # Formato 1: linha isolada "81,4%"
+        # Formato 2: linha com prefixo "%: 604.0%"
         for line in lines:
             stripped = line.strip()
-            # Linha que contém apenas uma porcentagem (ex: "81,4%" ou "81.4%")
+            # Formato 2: "%: XX,X%" ou "%: XX.X%"
+            pct_match = re.match(r'^%\s*:\s*([\d,\.]+)%', stripped)
+            if pct_match:
+                result['Percentage'] = pct_match.group(1).replace(',', '.')
+                break
+            # Formato 1: linha que contém apenas uma porcentagem (ex: "81,4%" ou "81.4%")
             if re.match(r'^[\d,]+%$', stripped):
                 result['Percentage'] = stripped.replace(',', '.')
                 break
         
-        # INR: INR X,XX
-        match = re.search(r'INR\s*([\d,]+)', text, re.IGNORECASE)
+        # INR: INR X,XX ou INR: X,XX
+        match = re.search(r'INR\s*:?\s*([\d,\.]+)', text, re.IGNORECASE)
         if match:
             result['INR'] = match.group(1).replace(',', '.')
         
-        # Controle: CONTROLE ...: XX,Xs
-        match = re.search(r'CONTROLE[^:]*:\s*([\d,]+\s*s?)', text, re.IGNORECASE)
+        # Controle: CONTROLE ...: XX,Xs ou XX.Xs
+        match = re.search(r'CONTROLE[^:]*:\s*([\d,\.]+\s*s?)', text, re.IGNORECASE)
         if match:
             result['Control'] = match.group(1).strip()
         
@@ -425,6 +431,24 @@ def task_sender_to_webhook():
                         logging.error(f"  ID do paciente não encontrado no exame. Verifique se o equipamento está configurado para enviar o código de barras.")
                         todos_enviados = False
                         continue
+                    
+                    # Verifica se o exame falhou (TEMPO: FALHOU!) — não envia para o webhook
+                    if payload.get('Status') == 'FAILED':
+                        logging.warning(f"⚠ Exame {i} de {nome_arquivo} (tag_identifier: {payload.get('FileName')}) FALHOU — não será enviado ao webhook.")
+                        logging.warning(f"  O equipamento reportou TEMPO: FALHOU! O exame precisa ser refeito.")
+                        # Salva JSON de referência na pasta de requisições não enviadas
+                        pasta_nao_enviados_txt = os.path.join(REQUISICOES_NAO_ENVIADAS_DIR, "txt")
+                        os.makedirs(pasta_nao_enviados_txt, exist_ok=True)
+                        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                        nome_falha = f"{os.path.splitext(nome_arquivo)[0]}_exame_{i}_{timestamp}.json"
+                        caminho_falha = os.path.join(pasta_nao_enviados_txt, nome_falha)
+                        try:
+                            with open(caminho_falha, "w", encoding="utf-8") as f:
+                                f.write(json.dumps(payload, indent=2, ensure_ascii=False))
+                            logging.info(f"  JSON de falha salvo: {caminho_falha}")
+                        except Exception as e:
+                            logging.warning(f"  Erro ao salvar JSON de falha: {e}")
+                        continue  # Pula o envio, mas não marca como falha de envio
                     
                     # Salva JSON de referência
                     pasta_txt = os.path.join(ENVIADOS_DIR, "txt")
