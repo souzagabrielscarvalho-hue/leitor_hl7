@@ -4,7 +4,6 @@ __pycache__/
 *$py.class
 *.so
 *.egg-info/
-dist/
 build/
 *.egg
 
@@ -12,8 +11,9 @@ build/
 *.spec
 *.manifest
 
-# Executáveis
+# Executáveis (exceto os que ficam em dist/ - estes são rastreados)
 *.exe
+!dist/*.exe
 
 # Virtual environment
 venv/
