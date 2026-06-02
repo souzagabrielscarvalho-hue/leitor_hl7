@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# PyInstaller
+*.spec
+*.manifest
+
+# Executáveis
+*.exe
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# PDFs de documentação (manuais do equipamento)
+*.pdf
+
+# Arquivos de build do PyInstaller
+localpycs/
+*.pkg
+*.toc
+*.pyz
+base_library.zip
+warn-*.txt
+xref-*.html
+Analysis-*.toc
+EXE-*.toc
+PKG-*.toc
+PYZ-*.toc
+
+# Imagens extraídas
+icon_extracted.png
+
+# Arquivos de log do equipamento
+coagmaster.log.txt
