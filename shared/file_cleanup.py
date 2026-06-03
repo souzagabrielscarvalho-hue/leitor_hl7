@@ -66,7 +66,21 @@ def rotate_log_file(log_file_path: str, max_size: int = DEFAULT_MAX_LOG_SIZE,
     rotated_name = os.path.join(dir_name, f"{name}.{timestamp}{ext}")
 
     try:
-        os.rename(log_file_path, rotated_name)
+        # No Windows, o FileHandler do logging mantém o arquivo aberto com lock.
+        # os.rename() falharia com [WinError 32] "arquivo já está sendo usado".
+        # Solução: copiar conteúdo para o rotacionado e truncar o original.
+        with open(log_file_path, 'rb') as src:
+            with open(rotated_name, 'wb') as dst:
+                while True:
+                    chunk = src.read(1024 * 1024)  # 1 MB por vez
+                    if not chunk:
+                        break
+                    dst.write(chunk)
+
+        # Trunca o arquivo original (abre em modo write, zera o conteúdo)
+        with open(log_file_path, 'w', encoding='utf-8') as f:
+            pass
+
         logging.info(f"[Cleanup] Log rotacionado: {base_name} → {os.path.basename(rotated_name)} "
                      f"({size / (1024*1024):.1f} MB)")
     except OSError as e:
