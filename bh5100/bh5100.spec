@@ -40,7 +40,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -50,7 +50,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     # --- Opções adicionais úteis ---
-    icon='Logo-VIDA-EXAMES-02-fixed.ico',  # Ícone do executável
+    icon='../Logo-VIDA-EXAMES-02-fixed.ico',  # Ícone do executável
     # version='version.txt',      # Info de versão do Windows
     # uac_admin=False,            # True = pedir privilégios de admin
     # uac_uiaccess=False,         # Acessibilidade UI
