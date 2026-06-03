@@ -6,8 +6,13 @@ import datetime
 import os
 import shutil
 import re
+import sys
 from threading import Thread
 import json
+
+# Import do módulo de limpeza compartilhado
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from shared.file_cleanup import FileCleanupConfig, start_cleanup_thread
 
 # ================= CONFIGURAÇÕES =================
 COM_PORT = 'COM4'
@@ -518,6 +523,12 @@ def main():
     thread_envio = Thread(target=task_sender_to_webhook, daemon=True)
     thread_envio.start()
     logging.info("Thread de envio iniciada.")
+
+    # Configurar e iniciar thread de limpeza de arquivos
+    cleanup_config = FileCleanupConfig()
+    cleanup_config.log_file_path = LOG_FILE
+    cleanup_config.cleanup_directories = [ENVIADOS_DIR, REQUISICOES_NAO_ENVIADAS_DIR]
+    start_cleanup_thread(cleanup_config)
 
     ser = None
     tentativas_porta = 0

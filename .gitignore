@@ -8,12 +8,11 @@ build/
 *.egg
 
 # PyInstaller
-*.spec
 *.manifest
 
 # Executáveis (exceto os que ficam em dist/ - estes são rastreados)
 *.exe
-!dist/*.exe
+!**/dist/*.exe
 
 # Virtual environment
 venv/
@@ -49,4 +48,5 @@ PYZ-*.toc
 icon_extracted.png
 
 # Arquivos de log do equipamento
+coagmaster.log.txt
 coagmaster.log.txt
