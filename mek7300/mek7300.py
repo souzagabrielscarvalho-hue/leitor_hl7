@@ -75,15 +75,15 @@ def multiply_by_1000(raw_value: str) -> str:
 
     trimmed = raw_value.strip()
 
-    # Extrai flags no final (L, H, LH, HL)
+    # Extrai flags no final (L, H, LH, HL, *)
     suffix = ""
-    while trimmed and trimmed[-1].isalpha():
+    while trimmed and (trimmed[-1].isalpha() or trimmed[-1] == '*'):
         suffix = trimmed[-1] + suffix
         trimmed = trimmed[:-1]
 
-    # Remove prefixo * de valor anormal
-    has_asterisk = trimmed.startswith("*")
-    if has_asterisk:
+    # Remove prefixo * de valor anormal (caso venha no início)
+    has_asterisk_prefix = trimmed.startswith("*")
+    if has_asterisk_prefix:
         trimmed = trimmed[1:]
 
     try:
@@ -94,7 +94,7 @@ def multiply_by_1000(raw_value: str) -> str:
             formatted = str(int(result))
         else:
             formatted = str(result)
-        prefix = "*" if has_asterisk else ""
+        prefix = "*" if has_asterisk_prefix else ""
         return f"{prefix}{formatted}{suffix}"
     except ValueError:
         logging.warning(f"Aviso: Não foi possível multiplicar o valor '{raw_value}' por 1000.")
