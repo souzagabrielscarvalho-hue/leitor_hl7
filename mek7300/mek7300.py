@@ -117,9 +117,17 @@ def create_initialization_file(data_received: str) -> bool:
         # Remove a primeira linha (data)
         data = lines[1:]
 
+        # Corrige código de barras: remove zero a mais no início se houver
+        raw_barcode = data[0]
+        if raw_barcode.startswith('00'):
+            corrected_barcode = raw_barcode[1:]
+            logging.info(f"Código de barras corrigido (zero a mais removido): {raw_barcode} → {corrected_barcode}")
+        else:
+            corrected_barcode = raw_barcode
+
         # Mapeia os dados recebidos
         formated_file = {
-            "FileName": data[0],
+            "FileName": corrected_barcode,
             "WBC": multiply_by_1000(data[1]),
             "LY_Percent": data[2],
             "MO_Percent": data[3],
