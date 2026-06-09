@@ -119,17 +119,12 @@ def create_initialization_file(data_received: str) -> bool:
         # Remove a primeira linha (data)
         data = lines[1:]
 
-        # Corrige código de barras: remove UM zero a mais no início se houver
-        # O equipamento pode adicionar um zero extra, resultando em "00" no início.
-        # Etiquetas que começam com apenas um "0" são legítimas e NÃO devem ser alteradas.
-        # Ex: "0012345" → "012345" (zero extra removido)
-        # Ex: "0123456" → "0123456" (zero legítimo, mantido)
+        # Usa o barcode exatamente como veio do equipamento (sem correção).
+        # O ReadBloodCountMachine.php (antigo) espera FileName no formato
+        # "0XXXXXXXXXXXX.txt" (0 + 12 dígitos + .txt) e extrai os 12 dígitos
+        # via regex /^0(\d{12})\.txt$/. Não devemos alterar o barcode.
         raw_barcode = data[0]
-        if raw_barcode.startswith('00'):
-            corrected_barcode = raw_barcode[1:]
-            logging.info(f"Código de barras corrigido (zero a mais removido): {raw_barcode} → {corrected_barcode}")
-        else:
-            corrected_barcode = raw_barcode
+        corrected_barcode = raw_barcode
 
         # Mapeia os dados recebidos
         formated_file = {
