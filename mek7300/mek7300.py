@@ -171,8 +171,10 @@ def save_to_file(formated_file: dict) -> bool:
         logging.info(f"FilePath: {file_path}")
 
         # Usa \r\n (CRLF) para compatibilidade com ReadBloodCountMachine.php
-        # que faz explode("\r\n", $content) para separar as linhas
-        with open(file_path, "w", encoding="utf-8") as f:
+        # que faz explode("\r\n", $content) para separar as linhas.
+        # newline='' desabilita a conversão automática de newlines no Windows
+        # (evita que \r\n seja convertido para \n na leitura/escrita).
+        with open(file_path, "w", encoding="utf-8", newline='') as f:
             f.write(f"FileName: {formated_file['FileName']}\r\n")
             f.write(f"WBC: {formated_file['WBC']}\r\n")
             f.write(f"NE: {formated_file['NE']}\r\n")
@@ -307,9 +309,9 @@ def task_sender_to_webhook():
                 caminho_destino = os.path.join(ENVIADOS_DIR, nome_arquivo)
                 caminho_nao_enviado = os.path.join(REQUISICOES_NAO_ENVIADAS_DIR, nome_arquivo)
 
-                # Lê o arquivo TXT
+                # Lê o arquivo TXT com newline='' para preservar CRLF no Windows
                 try:
-                    with open(caminho_origem, 'r', encoding='utf-8') as f:
+                    with open(caminho_origem, 'r', encoding='utf-8', newline='') as f:
                         file_content = f.read()
                 except PermissionError:
                     logging.error(f"✗ Permissão negada ao ler arquivo: {nome_arquivo} — o arquivo pode estar em uso.")
