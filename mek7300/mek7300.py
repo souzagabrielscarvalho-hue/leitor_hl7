@@ -198,6 +198,7 @@ def save_to_file(formated_file: dict) -> bool:
             f.write(f"PDW: {formated_file['PDW']}\r\n")
 
         logging.info(f"Arquivo '{file_name}' criado com sucesso na pasta 'gerados'.")
+        logging.debug(f"[DEBUG] Conteúdo do arquivo '{file_name}' (repr): {repr(open(file_path, 'r', encoding='utf-8').read()[:200])}")
         return True
 
     except Exception as ex:
@@ -347,6 +348,11 @@ def task_sender_to_webhook():
                     'ExamCode': 'HEMO',
                     'franchise_credential_id': FRANCHISE_CREDENTIAL_ID,
                 }
+
+                # Log de debug do payload
+                logging.info(f"[DEBUG] Payload FileName: {nome_arquivo}")
+                logging.info(f"[DEBUG] Payload Content (primeiros 200 chars): {repr(file_content[:200])}")
+                logging.info(f"[DEBUG] Verificando CRLF no Content: \\r\\n presente = {'\\r\\n' in file_content}")
 
                 # Tenta enviar com retry
                 enviado = _enviar_payload_webhook(payload, nome_arquivo, barcode)
