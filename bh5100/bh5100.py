@@ -535,13 +535,24 @@ def _enviar_payload_webhook(payload: dict, nome_arquivo: str, barcode: str) -> b
             )
 
             if response.status_code in (200, 201):
-                logging.info(f"✓ Sucesso ({response.status_code}): {nome_arquivo} enviado ao Webhook.")
                 try:
                     resp_json = response.json()
                     msg = resp_json.get('message', 'OK')
-                    logging.info(f"  Mensagem: {msg}")
+                    logging.info(f"  Mensagem do servidor: {msg}")
+                    
+                    # Verificar se o servidor indicou que o procedimento não foi encontrado
+                    msg_lower = msg.lower() if msg else ''
+                    if 'not found' in msg_lower or 'não encontrado' in msg_lower or 'não foi encontrado' in msg_lower:
+                        logging.error(f"✗ Webhook aceitou a requisição (HTTP {response.status_code}), mas o procedimento NÃO foi encontrado:")
+                        logging.error(f"  tag_identifier: {barcode}")
+                        logging.error(f"  Mensagem: {msg}")
+                        logging.error(f"  Isso geralmente significa que o código de barras não corresponde a um procedimento cadastrado.")
+                        return False
                 except:
-                    pass
+                    msg = response.text[:200] if response.text else 'OK'
+                    logging.info(f"  Resposta: {msg}")
+                
+                logging.info(f"✓ Sucesso ({response.status_code}): {nome_arquivo} enviado ao Webhook.")
                 return True
             elif response.status_code == 404:
                 logging.error(f"✗ ERRO 404: Endpoint não encontrado para {nome_arquivo}.")
@@ -680,6 +691,38 @@ def task_sender_to_webhook():
                         shutil.move(caminho_origem, caminho_nao_enviado)
                         continue
                     
+                    # Rejeitar exames de calibração/QC — barcode com zeros ou valores todos zerados
+                    barcode_limpo = barcode.strip()
+                    if barcode_limpo == '0000000' or set(barcode_limpo) == {'0'}:
+                        logging.warning(f"Arquivo {nome_arquivo}: barcode '{barcode}' parece ser mensagem de calibração/QC (todos zeros).")
+                        logging.warning(f"  Exames de controle de qualidade não são enviados ao webhook.")
+                        logging.warning(f"  Movendo para enviados sem processar.")
+                        shutil.move(caminho_origem, caminho_destino)
+                        continue
+                    
+                    # Verificar se todos os valores principais estão zerados (outro indicador de QC)
+                    valores_principais = ['WBC', 'RBC', 'HGB', 'PLT']
+                    todos_zerados = True
+                    for campo in valores_principais:
+                        if campo in campos:
+                            valor_str = campos[campo].rstrip('HL')
+                            try:
+                                if float(valor_str) != 0.0:
+                                    todos_zerados = False
+                                    break
+                            except (ValueError, TypeError):
+                                todos_zerados = False
+                                break
+                        else:
+                            todos_zerados = False
+                    
+                    if todos_zerados:
+                        logging.warning(f"Arquivo {nome_arquivo}: todos os valores principais (WBC, RBC, HGB, PLT) são zero.")
+                        logging.warning(f"  Provavelmente é uma mensagem de calibração/QC, não um exame real.")
+                        logging.warning(f"  Movendo para enviados sem processar.")
+                        shutil.move(caminho_origem, caminho_destino)
+                        continue
+                    
                     # Monta o payload com franchise_credential_id incluso no corpo
                     payload = {
                         'franchise_credential_id': FRANCHISE_CREDENTIAL_ID,
@@ -774,7 +817,9 @@ def main():
     bytes_recebidos = 0
     mensagens_processadas = 0
     ultimo_log_status = time.time()
+    ultimo_bytes_recebidos = 0
     INTERVALO_LOG_STATUS = 300  # log de status a cada 5 minutos
+    INTERVALO_ALERTA_SEM_DADOS = 1800  # alerta se sem dados novos por 30 minutos
 
     logging.info("Escutando dados da porta serial...")
     
@@ -838,6 +883,12 @@ def main():
                            f"Bytes recebidos: {bytes_recebidos} | "
                            f"Buffer atual: {len(buffer)} bytes | "
                            f"Porta aberta: {ser.is_open if ser else 'N/A'}")
+                
+                # Alerta se sem dados novos por 30 minutos
+                if bytes_recebidos == ultimo_bytes_recebidos and mensagens_processadas > 0:
+                    logging.warning(f"[ALERTA] Nenhum dado novo recebido desde o último status. "
+                                  f"O equipamento pode estar parado ou houve perda de comunicação.")
+                ultimo_bytes_recebidos = bytes_recebidos
                 ultimo_log_status = agora
 
             time.sleep(READ_INTERVAL)
