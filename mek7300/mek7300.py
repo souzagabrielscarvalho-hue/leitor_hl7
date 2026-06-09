@@ -18,12 +18,14 @@ COM_PORT = 'COM4'
 BAUD_RATE = 9600
 
 # ID da franquia configurado no banco de dados
+# IMPORTANTE: Este valor é embutido no .exe no momento da compilação (PyInstaller).
+# Deve ser configurado ANTES de gerar o executável para cada franquia.
 FRANCHISE_CREDENTIAL_ID = '88cf9273-5044-47f4-b8f6-01160345a190'
 
-# Webhook do Vida Exame
+# Webhook do Vida Exame (mesmo endpoint da versão C#)
 # Local: http://localhost/api/integration/mek7300
 # Produção: https://apoio.internal.vidaexame.com/api/integration/mek7300
-WEBHOOK_URL = f'https://apoio.internal.vidaexame.com/api/integration/mek7300?franchise_credential_id={FRANCHISE_CREDENTIAL_ID}'
+WEBHOOK_URL = 'https://apoio.internal.vidaexame.com/api/integration/mek7300'
 
 READ_INTERVAL = 0.1
 CHECK_FILES_INTERVAL = 5
@@ -117,7 +119,11 @@ def create_initialization_file(data_received: str) -> bool:
         # Remove a primeira linha (data)
         data = lines[1:]
 
-        # Corrige código de barras: remove zero a mais no início se houver
+        # Corrige código de barras: remove UM zero a mais no início se houver
+        # O equipamento pode adicionar um zero extra, resultando em "00" no início.
+        # Etiquetas que começam com apenas um "0" são legítimas e NÃO devem ser alteradas.
+        # Ex: "0012345" → "012345" (zero extra removido)
+        # Ex: "0123456" → "0123456" (zero legítimo, mantido)
         raw_barcode = data[0]
         if raw_barcode.startswith('00'):
             corrected_barcode = raw_barcode[1:]
@@ -169,30 +175,32 @@ def save_to_file(formated_file: dict) -> bool:
         file_path = os.path.join(directory_path, file_name)
         logging.info(f"FilePath: {file_path}")
 
+        # Usa \r\n (CRLF) para compatibilidade com ReadBloodCountMachine.php
+        # que faz explode("\r\n", $content) para separar as linhas
         with open(file_path, "w", encoding="utf-8") as f:
-            f.write(f"FileName: {formated_file['FileName']}\n")
-            f.write(f"WBC: {formated_file['WBC']}\n")
-            f.write(f"NE: {formated_file['NE']}\n")
-            f.write(f"NE_Percent: {formated_file['NE_Percent']}\n")
-            f.write(f"LY: {formated_file['LY']}\n")
-            f.write(f"LY_Percent: {formated_file['LY_Percent']}\n")
-            f.write(f"MO: {formated_file['MO']}\n")
-            f.write(f"MO_Percent: {formated_file['MO_Percent']}\n")
-            f.write(f"EO: {formated_file['EO']}\n")
-            f.write(f"EO_Percent: {formated_file['EO_Percent']}\n")
-            f.write(f"BA: {formated_file['BA']}\n")
-            f.write(f"BA_Percent: {formated_file['BA_Percent']}\n")
-            f.write(f"RBC: {formated_file['RBC']}\n")
-            f.write(f"HGB: {formated_file['HGB']}\n")
-            f.write(f"HCT: {formated_file['HCT']}\n")
-            f.write(f"MCV: {formated_file['MCV']}\n")
-            f.write(f"MCH: {formated_file['MCH']}\n")
-            f.write(f"MCHC: {formated_file['MCHC']}\n")
-            f.write(f"RDW_CV: {formated_file['RDW_CV']}\n")
-            f.write(f"PLT: {formated_file['PLT']}\n")
-            f.write(f"PCT: {formated_file['PCT']}\n")
-            f.write(f"MPV: {formated_file['MPV']}\n")
-            f.write(f"PDW: {formated_file['PDW']}\n")
+            f.write(f"FileName: {formated_file['FileName']}\r\n")
+            f.write(f"WBC: {formated_file['WBC']}\r\n")
+            f.write(f"NE: {formated_file['NE']}\r\n")
+            f.write(f"NE_Percent: {formated_file['NE_Percent']}\r\n")
+            f.write(f"LY: {formated_file['LY']}\r\n")
+            f.write(f"LY_Percent: {formated_file['LY_Percent']}\r\n")
+            f.write(f"MO: {formated_file['MO']}\r\n")
+            f.write(f"MO_Percent: {formated_file['MO_Percent']}\r\n")
+            f.write(f"EO: {formated_file['EO']}\r\n")
+            f.write(f"EO_Percent: {formated_file['EO_Percent']}\r\n")
+            f.write(f"BA: {formated_file['BA']}\r\n")
+            f.write(f"BA_Percent: {formated_file['BA_Percent']}\r\n")
+            f.write(f"RBC: {formated_file['RBC']}\r\n")
+            f.write(f"HGB: {formated_file['HGB']}\r\n")
+            f.write(f"HCT: {formated_file['HCT']}\r\n")
+            f.write(f"MCV: {formated_file['MCV']}\r\n")
+            f.write(f"MCH: {formated_file['MCH']}\r\n")
+            f.write(f"MCHC: {formated_file['MCHC']}\r\n")
+            f.write(f"RDW_CV: {formated_file['RDW_CV']}\r\n")
+            f.write(f"PLT: {formated_file['PLT']}\r\n")
+            f.write(f"PCT: {formated_file['PCT']}\r\n")
+            f.write(f"MPV: {formated_file['MPV']}\r\n")
+            f.write(f"PDW: {formated_file['PDW']}\r\n")
 
         logging.info(f"Arquivo '{file_name}' criado com sucesso na pasta 'gerados'.")
         return True
@@ -336,12 +344,13 @@ def task_sender_to_webhook():
                     shutil.move(caminho_origem, caminho_nao_enviado)
                     continue
 
-                # Monta o payload com franchise_credential_id incluso no corpo
+                # Monta o payload no mesmo formato da versão C#
+                # FileName = nome do arquivo .txt (igual ao C# que usa Path.GetFileName)
                 payload = {
-                    'franchise_credential_id': FRANCHISE_CREDENTIAL_ID,
-                    'FileName': barcode,
-                    'ExamCode': 'HEMO',
+                    'FileName': nome_arquivo,
                     'Content': file_content,
+                    'ExamCode': 'HEMO',
+                    'franchise_credential_id': FRANCHISE_CREDENTIAL_ID,
                 }
 
                 # Tenta enviar com retry
@@ -476,6 +485,7 @@ def main():
     logging.info(f"Data/Hora de início: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logging.info(f"Porta Serial: {COM_PORT} | Baud Rate: {BAUD_RATE}")
     logging.info(f"Webhook: {WEBHOOK_URL}")
+    logging.info(f"Franchise Credential ID: {FRANCHISE_CREDENTIAL_ID}")
     logging.info(f"Pastas: gerados={GERADOS_DIR} | enviados={ENVIADOS_DIR} | não enviados={REQUISICOES_NAO_ENVIADAS_DIR}")
     logging.info(f"Reenvio: até {MAX_RETRY} tentativas com intervalo de {RETRY_INTERVAL}s")
     logging.info("=" * 60)
