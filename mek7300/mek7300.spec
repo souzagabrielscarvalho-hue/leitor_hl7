@@ -1,37 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""
-PyInstaller spec file para gerar o executável do MEK7300 Service.
-"""
 
-import sys
-from pathlib import Path
-
-block_cipher = None
-
-BASE_DIR = Path('.')
 
 a = Analysis(
     ['mek7300.py'],
-    pathex=['..'],
+    pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[
-        'serial',
-        'serial.tools',
-        'serial.tools.list_ports',
-        'shared',
-        'shared.file_cleanup',
-    ],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
+    optimize=0,
 )
-
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -40,11 +22,11 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='MEK7300service',
+    name='mek7300',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
+    upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -53,5 +35,4 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
 )

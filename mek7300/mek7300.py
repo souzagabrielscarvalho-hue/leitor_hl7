@@ -22,10 +22,10 @@ BAUD_RATE = 9600
 # Deve ser configurado ANTES de gerar o executável para cada franquia.
 FRANCHISE_CREDENTIAL_ID = '88cf9273-5044-47f4-b8f6-01160345a190'
 
-# Webhook do Vida Exame (mesmo endpoint da versão C#)
-# Local: http://localhost/api/integration/mek7300
-# Produção: https://apoio.internal.vidaexame.com/api/integration/mek7300
-WEBHOOK_URL = 'https://apoio.internal.vidaexame.com/api/integration/mek7300'
+# Webhook do Vida Exame (V2 — campos individuais no JSON, igual ao BH5100)
+# Local: http://localhost/api/integration/mek7300/v2?franchise_credential_id=...
+# Produção: https://apoio.internal.vidaexame.com/api/integration/mek7300/v2?franchise_credential_id=...
+WEBHOOK_URL = f'https://apoio.internal.vidaexame.com/api/integration/mek7300/v2?franchise_credential_id={FRANCHISE_CREDENTIAL_ID}'
 
 READ_INTERVAL = 0.1
 CHECK_FILES_INTERVAL = 5
@@ -208,6 +208,35 @@ def save_to_file(formated_file: dict) -> bool:
         return False
 
 
+def parse_txt_to_dict(txt_content: str) -> dict:
+    """
+    Extrai os campos do hemograma do conteúdo TXT (formato "Chave: Valor").
+    Retorna um dict com os campos individuais, pronto para enviar ao webhook.
+    Os valores já chegam multiplicados por 1000 do save_to_file — não multiplicar novamente.
+    """
+    try:
+        campos = {}
+        for line in txt_content.strip().splitlines():
+            line = line.strip()
+            if not line or ':' not in line:
+                continue
+
+            key, value = line.split(':', 1)
+            key = key.strip()
+            value = value.strip()
+
+            if key == 'FileName':
+                campos['_barcode'] = value
+            else:
+                campos[key] = value
+
+        logging.info(f"parse_txt_to_dict: {len(campos)} campo(s) extraídos do TXT.")
+        return campos
+    except Exception as e:
+        logging.error(f"Erro ao fazer parse do TXT: {e}")
+        return {}
+
+
 # ---------------------------------------------------------------------------
 # Envio para webhook
 # ---------------------------------------------------------------------------
@@ -257,7 +286,7 @@ def _enviar_payload_webhook(payload: dict, nome_arquivo: str, barcode: str) -> b
                 logging.error(f"  Resposta: {response.text[:500]}")
             elif response.status_code in (401, 403):
                 logging.error(f"✗ ERRO {response.status_code}: Falha de autenticação para {nome_arquivo}.")
-                logging.error(f"  Verifique o FRANCHISE_CREDENTIAL_ID: {FRANCHISE_CREDENTIAL_ID}")
+                logging.error(f"  Verifique o FRANCHISE_CREDENTIAL_ID na URL: {WEBHOOK_URL}")
                 logging.error(f"  Resposta: {response.text[:500]}")
             elif response.status_code in (502, 503):
                 logging.error(f"✗ ERRO {response.status_code}: Servidor indisponível para {nome_arquivo}.")
@@ -342,19 +371,29 @@ def task_sender_to_webhook():
                     shutil.move(caminho_origem, caminho_nao_enviado)
                     continue
 
-                # Monta o payload no mesmo formato da versão C#
-                # FileName = nome do arquivo .txt (igual ao C# que usa Path.GetFileName)
+                # Faz o parse do TXT para extrair os campos individuais do hemograma
+                campos = parse_txt_to_dict(file_content)
+
+                if not campos or '_barcode' not in campos:
+                    logging.error(f"Arquivo {nome_arquivo}: não foi possível extrair campos do hemograma.")
+                    logging.error(f"  Movendo para '{REQUISICOES_NAO_ENVIADAS_DIR}'.")
+                    shutil.move(caminho_origem, caminho_nao_enviado)
+                    continue
+
+                # Remove o _barcode interno, usa o barcode extraído como FileName
+                barcode = campos.pop('_barcode')
+
+                # Monta o payload no mesmo formato da bh5100.py:
+                # campos individuais (WBC, NE, NE_Percent, etc.) como chaves do JSON
                 payload = {
-                    'FileName': nome_arquivo,
-                    'Content': file_content,
+                    'FileName': barcode,
                     'ExamCode': 'HEMO',
-                    'franchise_credential_id': FRANCHISE_CREDENTIAL_ID,
+                    **campos  # espalha WBC, NE, NE_Percent, etc. como chaves individuais
                 }
 
                 # Log de debug do payload
-                logging.info(f"[DEBUG] Payload FileName: {nome_arquivo}")
-                logging.info(f"[DEBUG] Payload Content (primeiros 200 chars): {repr(file_content[:200])}")
-                logging.info(f"[DEBUG] Verificando CRLF no Content: \\r\\n presente = {'\\r\\n' in file_content}")
+                logging.info(f"[DEBUG] Payload FileName: {barcode}")
+                logging.info(f"[DEBUG] Payload campos ({len(campos)}): {list(campos.keys())}")
 
                 # Tenta enviar com retry
                 enviado = _enviar_payload_webhook(payload, nome_arquivo, barcode)
