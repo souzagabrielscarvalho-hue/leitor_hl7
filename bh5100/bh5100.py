@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.file_cleanup import FileCleanupConfig, start_cleanup_thread
 
 # ================= CONFIGURAÇÕES =================
-COM_PORT = 'COM7'
+COM_PORT = 'COM3'
 BAUD_RATE = 9600
 
 # ID da franquia configurado no banco de dados
