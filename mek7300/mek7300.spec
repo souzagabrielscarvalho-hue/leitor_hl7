@@ -3,10 +3,12 @@
 
 a = Analysis(
     ['mek7300.py'],
-    pathex=[],
+    pathex=['..'],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=[
+        'shared.file_cleanup',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
