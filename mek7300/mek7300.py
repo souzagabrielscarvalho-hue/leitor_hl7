@@ -22,7 +22,7 @@ BAUD_RATE = 9600
 # Deve ser configurado ANTES de gerar o executável para cada franquia.
 FRANCHISE_CREDENTIAL_ID = '88cf9273-5044-47f4-b8f6-01160345a190'
 
-# Webhook do Vida Exame (V2 — campos individuais no JSON, igual ao BH5100)
+## Webhook do Vida Exame (V2 — campos individuais no JSON, igual ao BH5100)
 # Local: http://localhost/api/integration/mek7300/v2?franchise_credential_id=...
 # Produção: https://apoio.internal.vidaexame.com/api/integration/mek7300/v2?franchise_credential_id=...
 WEBHOOK_URL = f'https://apoio.internal.vidaexame.com/api/integration/mek7300/v2?franchise_credential_id={FRANCHISE_CREDENTIAL_ID}'
@@ -30,7 +30,7 @@ WEBHOOK_URL = f'https://apoio.internal.vidaexame.com/api/integration/mek7300/v2?
 READ_INTERVAL = 0.1
 CHECK_FILES_INTERVAL = 5
 MAX_RETRY = 5
-RETRY_INTERVAL = 60  # segundos entre tentativas de reenvio (1 minuto)
+RETRY_INTERVAL = 60
 # =================================================
 
 # Pastas de trabalho – na Área de Trabalho
@@ -120,9 +120,9 @@ def create_initialization_file(data_received: str) -> bool:
         data = lines[1:]
 
         # Usa o barcode exatamente como veio do equipamento (sem correção).
-        # O ReadBloodCountMachine.php (antigo) espera FileName no formato
-        # "0XXXXXXXXXXXX.txt" (0 + 12 dígitos + .txt) e extrai os 12 dígitos
-        # via regex /^0(\d{12})\.txt$/. Não devemos alterar o barcode.
+        # O arquivo local salva com .txt para backup, mas o webhook V2 envia
+        # o barcode puro (sem .txt) no campo FileName, igual ao BH5100.
+        # O ReadBloodCountMachineMek7300V2.php aceita barcode puro via cleanString().
         raw_barcode = data[0]
         corrected_barcode = raw_barcode
 
@@ -136,7 +136,7 @@ def create_initialization_file(data_received: str) -> bool:
             "EO_Percent": data[5],
             "BA_Percent": data[6],
             "LY": multiply_by_1000(data[7]),
-            "MO": data[8],
+            "MO": multiply_by_1000(data[8]),
             "NE": multiply_by_1000(data[9]),
             "EO": multiply_by_1000(data[10]),
             "BA": multiply_by_1000(data[11]),
@@ -170,8 +170,7 @@ def save_to_file(formated_file: dict) -> bool:
         file_path = os.path.join(directory_path, file_name)
         logging.info(f"FilePath: {file_path}")
 
-        # Usa \r\n (CRLF) para compatibilidade com ReadBloodCountMachine.php
-        # que faz explode("\r\n", $content) para separar as linhas.
+        # Usa \r\n (CRLF) para compatibilidade com o parse_txt_to_dict local.
         # newline='' desabilita a conversão automática de newlines no Windows
         # (evita que \r\n seja convertido para \n na leitura/escrita).
         with open(file_path, "w", encoding="utf-8", newline='') as f:
@@ -383,17 +382,19 @@ def task_sender_to_webhook():
                 # Remove o _barcode interno, usa o barcode extraído como FileName
                 barcode = campos.pop('_barcode')
 
-                # Monta o payload no mesmo formato da bh5100.py:
-                # campos individuais (WBC, NE, NE_Percent, etc.) como chaves do JSON
+                # Monta o payload no formato V2 (campos individuais, igual ao BH5100):
+                # FileName é o barcode puro (sem .txt), franchise_credential_id já está na URL.
+                # O ReadBloodCountMachineMek7300V2.php recebe array $hemogramData com os campos.
                 payload = {
+                    'franchise_credential_id': FRANCHISE_CREDENTIAL_ID,
                     'FileName': barcode,
                     'ExamCode': 'HEMO',
-                    **campos  # espalha WBC, NE, NE_Percent, etc. como chaves individuais
+                    **campos  # espalha WBC, NE, NE_Percent, LY, etc. como chaves individuais
                 }
 
                 # Log de debug do payload
                 logging.info(f"[DEBUG] Payload FileName: {barcode}")
-                logging.info(f"[DEBUG] Payload campos ({len(campos)}): {list(campos.keys())}")
+                logging.info(f"[DEBUG] Payload campos: {list(campos.keys())}")
 
                 # Tenta enviar com retry
                 enviado = _enviar_payload_webhook(payload, nome_arquivo, barcode)
