@@ -14,13 +14,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.file_cleanup import FileCleanupConfig, start_cleanup_thread
 
 # ================= CONFIGURAÇÕES =================
-COM_PORT = 'COM4'
+COM_PORT = 'COM5'
 BAUD_RATE = 9600
 
 # ID da franquia configurado no banco de dados
 # IMPORTANTE: Este valor é embutido no .exe no momento da compilação (PyInstaller).
 # Deve ser configurado ANTES de gerar o executável para cada franquia.
-FRANCHISE_CREDENTIAL_ID = '88cf9273-5044-47f4-b8f6-01160345a190'
+FRANCHISE_CREDENTIAL_ID = '3a0de0dc-af54-406f-a091-6e0de8b73690'
 
 #Webhook do Vida Exame (V2 — campos individuais no JSON, igual ao BH5100)
 # Local: http://localhost/api/integration/mek7300/v2?franchise_credential_id=...
