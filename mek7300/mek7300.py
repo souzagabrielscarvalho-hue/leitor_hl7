@@ -22,7 +22,7 @@ BAUD_RATE = 9600
 # Deve ser configurado ANTES de gerar o executável para cada franquia.
 FRANCHISE_CREDENTIAL_ID = '88cf9273-5044-47f4-b8f6-01160345a190'
 
-## Webhook do Vida Exame (V2 — campos individuais no JSON, igual ao BH5100)
+#Webhook do Vida Exame (V2 — campos individuais no JSON, igual ao BH5100)
 # Local: http://localhost/api/integration/mek7300/v2?franchise_credential_id=...
 # Produção: https://apoio.internal.vidaexame.com/api/integration/mek7300/v2?franchise_credential_id=...
 WEBHOOK_URL = f'https://apoio.internal.vidaexame.com/api/integration/mek7300/v2?franchise_credential_id={FRANCHISE_CREDENTIAL_ID}'
@@ -119,12 +119,12 @@ def create_initialization_file(data_received: str) -> bool:
         # Remove a primeira linha (data)
         data = lines[1:]
 
-        # Usa o barcode exatamente como veio do equipamento (sem correção).
-        # O arquivo local salva com .txt para backup, mas o webhook V2 envia
-        # o barcode puro (sem .txt) no campo FileName, igual ao BH5100.
-        # O ReadBloodCountMachineMek7300V2.php aceita barcode puro via cleanString().
+        # Remove um '0' do início do barcode, se presente.
+        # O MEK7300 pode enviar o barcode com um zero à frente (ex: "012345678901"),
+        # mas o sistema espera apenas os 12 dígitos sem o zero (ex: "123456789012").
+        # Remove apenas um zero — se não começar com zero, mantém como está.
         raw_barcode = data[0]
-        corrected_barcode = raw_barcode
+        corrected_barcode = raw_barcode[1:] if raw_barcode.startswith('0') else raw_barcode
 
         # Mapeia os dados recebidos
         formated_file = {
@@ -136,7 +136,7 @@ def create_initialization_file(data_received: str) -> bool:
             "EO_Percent": data[5],
             "BA_Percent": data[6],
             "LY": multiply_by_1000(data[7]),
-            "MO": multiply_by_1000(data[8]),
+            "MO": data[8],
             "NE": multiply_by_1000(data[9]),
             "EO": multiply_by_1000(data[10]),
             "BA": multiply_by_1000(data[11]),
@@ -386,7 +386,6 @@ def task_sender_to_webhook():
                 # FileName é o barcode puro (sem .txt), franchise_credential_id já está na URL.
                 # O ReadBloodCountMachineMek7300V2.php recebe array $hemogramData com os campos.
                 payload = {
-                    'franchise_credential_id': FRANCHISE_CREDENTIAL_ID,
                     'FileName': barcode,
                     'ExamCode': 'HEMO',
                     **campos  # espalha WBC, NE, NE_Percent, LY, etc. como chaves individuais
