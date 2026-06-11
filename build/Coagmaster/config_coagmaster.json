@@ -1,0 +1,6 @@
+{
+    "com_port": "COM4",
+    "baud_rate": 115200,
+    "franchise_credential_id": "f47d9a16-df12-4091-b759-79648d13e371",
+    "webhook_url": "https://apoio.internal.vidaexame.com/api/integration/coagmaster?franchise_credential_id={franchise_credential_id}"
+}
