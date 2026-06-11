@@ -15,6 +15,7 @@ a = Analysis(
         # 'serial',
         # 'hl7',
         'shared.file_cleanup',
+        'shared.config_loader',
     ],
     hookspath=[],
     hooksconfig={},

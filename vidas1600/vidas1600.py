@@ -5,13 +5,28 @@ import logging
 import datetime
 import os
 import shutil
+import sys
 from threading import Thread
 import base64
 
+# Import do módulo de configuração compartilhado
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from shared.config_loader import load_config
+
 # ================= CONFIGURAÇÕES =================
-COM_PORT = 'COM5'          # Ajustar conforme necessário
-BAUD_RATE = 9600           # VIDAS 1600 geralmente usa 9600
-WEBHOOK_URL = 'https://webhook.site/205ed01c-6ba8-4963-9dc8-9a6a727a0196'
+# As configurações abaixo são valores padrão.
+# Para alterar COM_PORT ou WEBHOOK_URL sem recompilar o .exe,
+# edite o arquivo config_vidas1600.json que fica ao lado do executável.
+# Se o arquivo não existir, ele será criado automaticamente na primeira execução.
+_config, _config_status = load_config('vidas1600', {
+    'com_port': 'COM5',
+    'baud_rate': 9600,
+    'webhook_url': 'https://webhook.site/205ed01c-6ba8-4963-9dc8-9a6a727a0196',
+})
+
+COM_PORT = _config['com_port']
+BAUD_RATE = _config['baud_rate']
+WEBHOOK_URL = _config['webhook_url']
 READ_INTERVAL = 0.1
 CHECK_FILES_INTERVAL = 5   # segundos para checar a pasta de pendentes
 
@@ -32,6 +47,7 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[logging.FileHandler(LOG_FILE, encoding='utf-8'), logging.StreamHandler()]
 )
+logging.info(_config_status)
 
 # Caracteres de controle HL7 (MLLP)
 SB = chr(0x0B)   # Start Block

@@ -13,18 +13,28 @@ import json
 # Import do módulo de limpeza compartilhado
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.file_cleanup import FileCleanupConfig, start_cleanup_thread
+from shared.config_loader import load_config
 
 # ================= CONFIGURAÇÕES =================
-COM_PORT = 'COM4'
-BAUD_RATE = 115200
+# As configurações abaixo são valores padrão.
+# Para alterar COM_PORT ou FRANCHISE_CREDENTIAL_ID sem recompilar o .exe,
+# edite o arquivo config_coagmaster.json que fica ao lado do executável.
+# Se o arquivo não existir, ele será criado automaticamente na primeira execução.
+_config, _config_status = load_config('coagmaster', {
+    'com_port': 'COM4',
+    'baud_rate': 115200,
+    'franchise_credential_id': 'f47d9a16-df12-4091-b759-79648d13e371',
+    'webhook_url': 'https://apoio.internal.vidaexame.com/api/integration/coagmaster?franchise_credential_id={franchise_credential_id}',
+})
 
-# ID da franquia configurado no banco de dados
-FRANCHISE_CREDENTIAL_ID = 'f47d9a16-df12-4091-b759-79648d13e371'
+COM_PORT = _config['com_port']
+BAUD_RATE = _config['baud_rate']
+FRANCHISE_CREDENTIAL_ID = _config['franchise_credential_id']
 
 # Webhook do Coagmaster
 # Local: http://localhost:8039/api/integration/coagmaster
 # Produção: https://apoio.internal.vidaexame.com/api/integration/coagmaster
-WEBHOOK_URL = f'https://apoio.internal.vidaexame.com/api/integration/coagmaster?franchise_credential_id={FRANCHISE_CREDENTIAL_ID}'
+WEBHOOK_URL = _config['webhook_url'].format(franchise_credential_id=FRANCHISE_CREDENTIAL_ID)
 
 READ_INTERVAL = 0.1
 CHECK_FILES_INTERVAL = 5
@@ -51,6 +61,7 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[logging.FileHandler(LOG_FILE, encoding='utf-8'), logging.StreamHandler()]
 )
+logging.info(_config_status)
 
 
 def split_exams_from_log(content: str) -> list[str]:

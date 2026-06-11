@@ -8,6 +8,7 @@ a = Analysis(
     datas=[],
     hiddenimports=[
         'shared.file_cleanup',
+        'shared.config_loader',
     ],
     hookspath=[],
     hooksconfig={},

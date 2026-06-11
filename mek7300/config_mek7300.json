@@ -1,0 +1,6 @@
+{
+    "com_port": "COM1",
+    "baud_rate": 9600,
+    "franchise_credential_id": "88cf9273-5044-47f4-b8f6-01160345a190",
+    "webhook_url": "https://apoio.internal.vidaexame.com/api/integration/mek7300/v2?franchise_credential_id={franchise_credential_id}"
+}
