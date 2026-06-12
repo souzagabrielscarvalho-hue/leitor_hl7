@@ -145,7 +145,7 @@ def create_initialization_file(data_received: str) -> bool:
             "EO_Percent": data[5],
             "BA_Percent": data[6],
             "LY": multiply_by_1000(data[7]),
-            "MO": data[8],
+            "MO": multiply_by_1000(data[8]),
             "NE": multiply_by_1000(data[9]),
             "EO": multiply_by_1000(data[10]),
             "BA": multiply_by_1000(data[11]),

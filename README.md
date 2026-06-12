@@ -17,23 +17,37 @@ Sistema de integração para leitura de dados de analisadores laboratoriais via 
 
 ```
 leitor_hl7/
-├── bh5100/                    # Analisador BH5100 (hemograma)
+├── bh5100/                    # Código fonte — Analisador BH5100 (hemograma)
 │   ├── bh5100.py              # Código principal
 │   ├── bh5100.spec            # Config de build PyInstaller
-│   └── dist/                  # Executável gerado
-├── Coagmaster/                # Analisador Coagmaster (coagulação)
+│   ├── bmptopng.py            # Conversão BMP → PNG
+│   ├── makeimage.py           # Geração de imagens
+│   ├── makerpdf.py            # Geração de PDFs
+│   └── COM_simulator.py       # Simulador HL7 para testes
+├── Coagmaster/                # Código fonte — Analisador Coagmaster (coagulação)
 │   ├── coagmaster.py          # Código principal
 │   ├── coagmaster.spec        # Config de build PyInstaller
-│   └── dist/                  # Executável gerado
-├── mek7300/                   # Analisador MEK7300 (hemograma)
+│   ├── COM_simulator.py       # Simulador de dados para testes
+│   └── test_parser.py         # Testes de parsing
+├── mek7300/                   # Código fonte — Analisador MEK7300 (hemograma)
 │   ├── mek7300.py             # Código principal
-│   ├── mek7300.spec           # Config de build PyInstaller
-│   └── dist/                  # Executável gerado
-├── vidas1600/                 # Analisador VIDAS 1600 (imunoensaio)
-│   ├── vidas1600.py           # Código principal
-│   └── dist/                  # Executável gerado
-├── shared/                    # Módulos compartilhados
+│   └── mek7300.spec           # Config de build PyInstaller
+├── vidas1600/                 # Código fonte — Analisador VIDAS 1600 (imunoensaio)
+│   └── vidas1600.py           # Código principal
+├── shared/                    # Módulos compartilhados entre analisadores
+│   ├── __init__.py
+│   ├── config_loader.py      # Carregamento de config JSON externa
 │   └── file_cleanup.py        # Limpeza automática de arquivos
+├── build/                     # Executáveis prontos e seus JSONs de configuração
+│   ├── bh5100/
+│   │   ├── bh5100.exe
+│   │   └── config_bh5100.json
+│   ├── COAGMASTER/
+│   │   ├── coagmaster.exe
+│   │   └── config_coagmaster.json
+│   └── mek7300/
+│       ├── mek7300.exe
+│       └── config_mek7300.json
 ├── venv/                      # Ambiente virtual Python
 ├── .gitignore
 └── README.md
@@ -80,9 +94,9 @@ cd vidas1600
 pyinstaller vidas1600.spec --noconfirm
 ```
 
-O executável é gerado em `dist/` dentro da pasta do respectivo analisador.
+O executável e seu JSON de configuração são gerados em `build/<analisador>/` na raiz do projeto.
 
-> ⚠️ **Antes de gerar o executável**, verifique se a variável `COM_PORT` no arquivo `.py` corresponde à porta onde o cabo do equipamento está conectado. Consulte o Gerenciador de Dispositivos do Windows para confirmar.
+> ⚠️ **Antes de gerar o executável**, verifique se a variável `COM_PORT` no arquivo `.py` corresponde à porta onde o cabo do equipamento está conectado. Consulte o Gerenciador de Dispositivos do Windows para confirmar. Após a build, você pode editar o arquivo `config_*.json` ao lado do `.exe` para alterar a porta COM sem precisar recompilar.
 
 ## Pastas de Trabalho
 

@@ -4,15 +4,14 @@ __pycache__/
 *$py.class
 *.so
 *.egg-info/
-build/
 *.egg
 
 # PyInstaller
 *.manifest
 
-# Executáveis (exceto os que ficam em dist/ - estes são rastreados)
+# Executáveis (exceto os que ficam em build/ - estes são rastreados)
 *.exe
-!**/dist/*.exe
+!build/**/*.exe
 
 # Virtual environment
 venv/
