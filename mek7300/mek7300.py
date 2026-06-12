@@ -522,6 +522,15 @@ class SerialListener:
             except Exception as ex:
                 self._buffer = ""
                 logging.error(f"✗ Erro no read_loop: {ex}")
+                # Fecha a porta para forçar reabertura na próxima iteração.
+                # ClearCommError (OSError 22) indica handle inválido — manter a porta
+                # "aberta" impede a recuperação automática.
+                try:
+                    if self._serial_port and self._serial_port.is_open:
+                        self._serial_port.close()
+                        logging.info("Porta serial fechada após erro — será reaberta na próxima iteração.")
+                except Exception as close_ex:
+                    logging.error(f"Erro ao fechar porta serial: {close_ex}")
                 time.sleep(1)
 
 
