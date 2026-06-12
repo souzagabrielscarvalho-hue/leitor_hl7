@@ -134,6 +134,40 @@ def extrair_imagens_de_hl7(conteudo: str, diretorio_saida: str, prefixo: str = "
 
     return imagens_extraidas
 
+
+def format_thousands(raw_value: str) -> str:
+    """
+    Adiciona separador de milhar (.) para valores > 999.
+    Ex: "7640" → "7.640", "224000" → "224.000", "350" → "350"
+    Não lida com flags — usar apenas sobre valores numéricos puros.
+    """
+    if not raw_value or not raw_value.strip():
+        return raw_value
+
+    trimmed = raw_value.strip()
+
+    try:
+        value = float(trimmed)
+        if value == int(value):
+            int_value = int(value)
+        else:
+            # Valor com decimal — não formata milhar
+            return trimmed
+
+        if int_value > 999:
+            str_val = str(int_value)
+            parts = []
+            while len(str_val) > 3:
+                parts.append(str_val[-3:])
+                str_val = str_val[:-3]
+            parts.append(str_val)
+            return ".".join(reversed(parts))
+        else:
+            return str(int_value)
+    except ValueError:
+        return raw_value
+
+
 def parse_hl7_to_txt(hl7_message: str) -> str:
     try:
         clean_message = hl7_message.replace(SB, '').replace(EB, '')
@@ -297,11 +331,15 @@ def parse_hl7_to_txt(hl7_message: str) -> str:
                     logging.warning(f"Não foi possível multiplicar {campo_multiplicar} por 1000: valor='{valor_original}', erro={e}")
 
         # Arredondar todos os valores para 1 casa decimal (após todos os cálculos)
+        # e aplicar format_thousands nos campos absolutos (WBC, NE, LY, MO, EO, BA, PLT)
+        CAMPOS_ABSOLUTOS = {'WBC', 'NE', 'LY', 'MO', 'EO', 'BA', 'PLT'}
         for nome in resultados:
             valor, flag = resultados[nome]
             try:
                 valor_float = float(valor)
                 valor_arredondado = str(round(valor_float, 1))
+                if nome in CAMPOS_ABSOLUTOS:
+                    valor_arredondado = format_thousands(valor_arredondado)
                 resultados[nome] = (valor_arredondado, flag)
             except (ValueError, TypeError):
                 pass  # mantém o valor original se não for numérico
@@ -484,6 +522,8 @@ def parse_hl7_to_dict(hl7_message: str) -> dict:
                     logging.warning(f"Não foi possível multiplicar {campo_multiplicar} por 1000: valor='{valor_str}', erro={e}")
 
         # Arredondar todos os valores para 1 casa decimal (após todos os cálculos)
+        # e aplicar format_thousands nos campos absolutos (WBC, NE, LY, MO, EO, BA, PLT)
+        CAMPOS_ABSOLUTOS = {'WBC', 'NE', 'LY', 'MO', 'EO', 'BA', 'PLT'}
         for nome in resultados:
             valor_com_flag = resultados[nome]
             # Separar flag do valor
@@ -495,6 +535,8 @@ def parse_hl7_to_dict(hl7_message: str) -> dict:
             try:
                 valor_float = float(valor_str)
                 valor_arredondado = str(round(valor_float, 1))
+                if nome in CAMPOS_ABSOLUTOS:
+                    valor_arredondado = format_thousands(valor_arredondado)
                 resultados[nome] = f"{valor_arredondado}{flag_campo}"
             except (ValueError, TypeError):
                 pass  # mantém o valor original se não for numérico

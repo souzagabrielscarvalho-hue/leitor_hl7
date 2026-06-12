@@ -112,6 +112,56 @@ def multiply_by_1000(raw_value: str) -> str:
         return raw_value
 
 
+def format_thousands(raw_value: str) -> str:
+    """
+    Adiciona separador de milhar (.) para valores > 999, preservando flags como L, H e *.
+    Ex: "7640" → "7.640", "224000*" → "224.000*", "1600L" → "1.600L", "350" → "350"
+    """
+    if not raw_value or not raw_value.strip():
+        return raw_value
+
+    trimmed = raw_value.strip()
+
+    # Extrai flags no final (L, H, LH, HL, *)
+    suffix = ""
+    while trimmed and (trimmed[-1].isalpha() or trimmed[-1] == '*'):
+        suffix = trimmed[-1] + suffix
+        trimmed = trimmed[:-1]
+
+    # Remove prefixo * de valor anormal
+    has_asterisk_prefix = trimmed.startswith("*")
+    if has_asterisk_prefix:
+        trimmed = trimmed[1:]
+
+    try:
+        value = float(trimmed)
+        if value == int(value):
+            int_value = int(value)
+        else:
+            # Valor com decimal — não formata milhar, retorna como está
+            prefix = "*" if has_asterisk_prefix else ""
+            return f"{prefix}{trimmed}{suffix}"
+
+        # Só formata se > 999
+        if int_value > 999:
+            str_val = str(int_value)
+            # Insere "." a cada 3 dígitos da direita para esquerda
+            parts = []
+            while len(str_val) > 3:
+                parts.append(str_val[-3:])
+                str_val = str_val[:-3]
+            parts.append(str_val)
+            formatted = ".".join(reversed(parts))
+        else:
+            formatted = str(int_value)
+
+        prefix = "*" if has_asterisk_prefix else ""
+        return f"{prefix}{formatted}{suffix}"
+    except ValueError:
+        logging.warning(f"Aviso: Não foi possível formatar milhar do valor '{raw_value}'.")
+        return raw_value
+
+
 def create_initialization_file(data_received: str) -> bool:
     """
     Processa os dados brutos recebidos da porta serial e salva arquivo formatado.
@@ -138,17 +188,17 @@ def create_initialization_file(data_received: str) -> bool:
         # Mapeia os dados recebidos
         formated_file = {
             "FileName": corrected_barcode,
-            "WBC": multiply_by_1000(data[1]),
+            "WBC": format_thousands(multiply_by_1000(data[1])),
             "LY_Percent": data[2],
             "MO_Percent": data[3],
             "NE_Percent": data[4],
             "EO_Percent": data[5],
             "BA_Percent": data[6],
-            "LY": multiply_by_1000(data[7]),
-            "MO": multiply_by_1000(data[8]),
-            "NE": multiply_by_1000(data[9]),
-            "EO": multiply_by_1000(data[10]),
-            "BA": multiply_by_1000(data[11]),
+            "LY": format_thousands(multiply_by_1000(data[7])),
+            "MO": format_thousands(multiply_by_1000(data[8])),
+            "NE": format_thousands(multiply_by_1000(data[9])),
+            "EO": format_thousands(multiply_by_1000(data[10])),
+            "BA": format_thousands(multiply_by_1000(data[11])),
             "RBC": data[12],
             "HGB": data[13],
             "HCT": data[14],
@@ -156,7 +206,7 @@ def create_initialization_file(data_received: str) -> bool:
             "MCH": data[16],
             "MCHC": data[17],
             "RDW_CV": data[18],
-            "PLT": multiply_by_1000(data[19]),
+            "PLT": format_thousands(multiply_by_1000(data[19])),
             "PCT": data[20],
             "MPV": data[21],
             "PDW": data[22],
