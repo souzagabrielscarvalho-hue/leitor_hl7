@@ -86,9 +86,9 @@ def multiply_by_1000(raw_value: str) -> str:
 
     trimmed = raw_value.strip()
 
-    # Extrai flags no final (L, H, LH, HL, *)
+    # Extrai flags no final (L, H, LH, HL, *, ?)
     suffix = ""
-    while trimmed and (trimmed[-1].isalpha() or trimmed[-1] == '*'):
+    while trimmed and (trimmed[-1].isalpha() or trimmed[-1] in ('*', '?')):
         suffix = trimmed[-1] + suffix
         trimmed = trimmed[:-1]
 
@@ -122,9 +122,9 @@ def format_thousands(raw_value: str) -> str:
 
     trimmed = raw_value.strip()
 
-    # Extrai flags no final (L, H, LH, HL, *)
+    # Extrai flags no final (L, H, LH, HL, *, ?)
     suffix = ""
-    while trimmed and (trimmed[-1].isalpha() or trimmed[-1] == '*'):
+    while trimmed and (trimmed[-1].isalpha() or trimmed[-1] in ('*', '?')):
         suffix = trimmed[-1] + suffix
         trimmed = trimmed[:-1]
 
@@ -540,14 +540,22 @@ class SerialListener:
 
     def _read_loop(self):
         """Loop principal de leitura da porta serial."""
+        # Watchdog: se a porta ficar >60s sem receber dados, força reabertura.
+        # Evita que handles USB inválidos (ClearCommError) passem despercebidos
+        # por longos períodos quando in_waiting == 0.
+        WATCHDOG_TIMEOUT = 60  # segundos
+        last_activity = time.time()
+
         while self._running:
             if not self.is_port_open:
                 self.open_port()
+                last_activity = time.time()
                 time.sleep(2)
                 continue
 
             try:
                 if self._serial_port.in_waiting > 0:
+                    last_activity = time.time()  # reseta watchdog
                     incoming = self._serial_port.read(self._serial_port.in_waiting).decode("ascii", errors="replace")
                     logging.info(f"Recebendo dados via serial...")
                     logging.debug(f"Dados brutos: {incoming}")
@@ -568,6 +576,20 @@ class SerialListener:
                             create_initialization_file(exam_data)
 
                 time.sleep(READ_INTERVAL)
+
+                # Watchdog: se a porta está aberta mas sem atividade por >60s,
+                # força reabertura para evitar handles USB inválidos silenciosos.
+                if self.is_port_open and (time.time() - last_activity) > WATCHDOG_TIMEOUT:
+                    logging.warning(
+                        f"Watchdog: porta {self.port_name} sem atividade há "
+                        f"{int(time.time() - last_activity)}s — forçando reabertura."
+                    )
+                    try:
+                        self._serial_port.close()
+                    except Exception:
+                        pass
+                    self._serial_port = None
+                    last_activity = time.time()
 
             except Exception as ex:
                 self._buffer = ""
