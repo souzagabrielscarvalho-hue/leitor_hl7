@@ -516,7 +516,7 @@ class SerialListener:
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
                 bytesize=serial.EIGHTBITS,
-                timeout=1,
+                timeout=0.1,
             )
             logging.info(f"✓ Conectado à porta {self.port_name} com sucesso.")
         except Exception as ex:
@@ -544,7 +544,16 @@ class SerialListener:
         # Evita que handles USB inválidos (ClearCommError) passem despercebidos
         # por longos períodos quando in_waiting == 0.
         WATCHDOG_TIMEOUT = 60  # segundos
+        # Keep-alive: read(1) não-bloqueante a cada 90s mantém o handle USB ativo,
+        # prevenindo o USB Selective Suspend do Windows (~120s de inatividade).
+        # Diferente de DTR/RTS toggle, não envia nenhum sinal ao equipamento.
+        KEEPALIVE_INTERVAL = 90  # segundos
+        # Log de status periódico (alinhado com BH5100, Coagmaster, PKL, VIDAS1600)
+        INTERVALO_LOG_STATUS = 300  # 5 minutos
         last_activity = time.time()
+        ultimo_log_status = time.time()
+        bytes_recebidos = 0
+        mensagens_processadas = 0
 
         while self._running:
             if not self.is_port_open:
@@ -555,9 +564,10 @@ class SerialListener:
 
             try:
                 if self._serial_port.in_waiting > 0:
-                    last_activity = time.time()  # reseta watchdog
+                    last_activity = time.time()  # reseta watchdog/keepalive
                     incoming = self._serial_port.read(self._serial_port.in_waiting).decode("ascii", errors="replace")
-                    logging.info(f"Recebendo dados via serial...")
+                    bytes_recebidos += len(incoming)
+                    logging.debug(f"Recebendo dados via serial...")
                     logging.debug(f"Dados brutos: {incoming}")
 
                     with self._lock:
@@ -574,8 +584,23 @@ class SerialListener:
                             logging.info(f"Dados completos recebidos ({len(exam_data)} caracteres)")
 
                             create_initialization_file(exam_data)
+                            mensagens_processadas += 1
 
                 time.sleep(READ_INTERVAL)
+
+                # Keep-alive: read(1) não-bloqueante mantém o handle USB ativo
+                # sem enviar sinais ao equipamento. Se houver byte, ele é
+                # adicionado ao buffer normalmente (zero perda de dados).
+                if self.is_port_open and (time.time() - last_activity) > KEEPALIVE_INTERVAL:
+                    try:
+                        byte = self._serial_port.read(1)
+                        if byte:
+                            with self._lock:
+                                self._buffer += byte.decode("ascii", errors="replace")
+                            bytes_recebidos += 1
+                            last_activity = time.time()
+                    except Exception:
+                        pass  # watchdog trata handles inválidos
 
                 # Watchdog: se a porta está aberta mas sem atividade por >60s,
                 # força reabertura para evitar handles USB inválidos silenciosos.
@@ -590,6 +615,18 @@ class SerialListener:
                         pass
                     self._serial_port = None
                     last_activity = time.time()
+
+                # Log de status periódico (a cada 5 min)
+                agora = time.time()
+                if agora - ultimo_log_status >= INTERVALO_LOG_STATUS:
+                    logging.info(
+                        f"[STATUS] Porta: {self.port_name} | Aberta: {self.is_port_open} | "
+                        f"Bytes recebidos: {bytes_recebidos} | "
+                        f"Mensagens processadas: {mensagens_processadas} | "
+                        f"Buffer: {len(self._buffer)} chars | "
+                        f"Última atividade: {int(agora - last_activity)}s atrás"
+                    )
+                    ultimo_log_status = agora
 
             except Exception as ex:
                 self._buffer = ""
