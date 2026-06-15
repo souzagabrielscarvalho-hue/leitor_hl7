@@ -1,0 +1,6 @@
+{
+    "com_port": "COM5",
+    "baud_rate": 9600,
+    "franchise_credential_id": "85361c80-9688-47e9-8cb3-ed838a9b1832",
+    "webhook_url": "https://apoio.internal.vidaexame.com/api/integration/vidas1600?franchise_credential_id={franchise_credential_id}"
+}

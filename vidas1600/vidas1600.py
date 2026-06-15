@@ -14,18 +14,28 @@ import json
 # Import do módulo de limpeza compartilhado
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.file_cleanup import FileCleanupConfig, start_cleanup_thread
+from shared.config_loader import load_config
 
 # ================= CONFIGURAÇÕES =================
-COM_PORT = 'COM5'          # Ajustar conforme necessário
-BAUD_RATE = 9600           # VIDAS 1600 geralmente usa 9600
+# As configurações abaixo são valores padrão.
+# Para alterar COM_PORT ou FRANCHISE_CREDENTIAL_ID sem recompilar o .exe,
+# edite o arquivo config_vidas1600.json que fica ao lado do executável.
+# Se o arquivo não existir, ele será criado automaticamente na primeira execução.
+_config, _config_status = load_config('vidas1600', {
+    'com_port': 'COM5',
+    'baud_rate': 9600,
+    'franchise_credential_id': '85361c80-9688-47e9-8cb3-ed838a9b1832',
+    'webhook_url': 'https://apoio.internal.vidaexame.com/api/integration/vidas1600?franchise_credential_id={franchise_credential_id}',
+})
 
-# ID da franquia configurado no banco de dados
-FRANCHISE_CREDENTIAL_ID = '85361c80-9688-47e9-8cb3-ed838a9b1832'
+COM_PORT = _config['com_port']
+BAUD_RATE = _config['baud_rate']
+FRANCHISE_CREDENTIAL_ID = _config['franchise_credential_id']
 
 # Webhook do VIDAS 1600
 # Local: http://localhost:8039/api/integration/vidas1600
 # Produção: https://apoio.internal.vidaexame.com/api/integration/vidas1600
-WEBHOOK_URL = f'https://apoio.internal.vidaexame.com/api/integration/vidas1600?franchise_credential_id={FRANCHISE_CREDENTIAL_ID}'
+WEBHOOK_URL = _config['webhook_url'].format(franchise_credential_id=FRANCHISE_CREDENTIAL_ID)
 
 READ_INTERVAL = 0.1
 CHECK_FILES_INTERVAL = 5
