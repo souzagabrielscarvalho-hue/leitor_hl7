@@ -9,6 +9,10 @@ a = Analysis(
     hiddenimports=[
         'shared.file_cleanup',
         'shared.config_loader',
+        'serial',
+        'serial.serialutil',
+        'serial.serialwin32',
+        'serial.win32',
     ],
     hookspath=[],
     hooksconfig={},
