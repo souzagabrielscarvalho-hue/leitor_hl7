@@ -102,6 +102,7 @@ _session_lock = Lock()
 _pending_batches: dict = {}       # tag_id → {"tag_id", "results": [], "patient": {...}, "order_time": datetime}
 _current_tag_id: str | None = None
 _session_patient: dict | None = None
+_pending_queries: list = []       # Lista de specimen_ids recebidos em registros Q
 # ===========================================================
 
 
@@ -178,7 +179,7 @@ def parse_astm_frame(frame: str) -> dict | None:
 def parse_astm_record(fields: list[str], record_type: str) -> dict:
     """
     Converte os campos de um registro ASTM em um dicionário estruturado,
-    dependendo do tipo de registro (H, P, O, R, L).
+    dependendo do tipo de registro (H, P, O, Q, R, L).
     """
     record = {"type": record_type, "raw_fields": fields}
 
@@ -207,6 +208,15 @@ def parse_astm_record(fields: list[str], record_type: str) -> dict:
             record["action_code"] = fields[11] if len(fields) > 11 else ""
             record["sample_type"] = fields[15] if len(fields) > 15 else ""
 
+        elif record_type == "Q":  # Query — equipamento solicita informações sobre amostra
+            # Q|1|^SpecimenID||ALL||||||||O
+            # Campo 2: número da sequência de início
+            # Campo 3: specimen ID (formato ^ID)
+            specimen_raw = fields[3] if len(fields) > 3 else ""
+            record["specimen_id"] = specimen_raw.lstrip('^') if specimen_raw else ""
+            record["query_type"] = fields[4] if len(fields) > 4 else ""  # ALL = todos os testes
+            record["action_code"] = fields[12] if len(fields) > 12 else ""
+
         elif record_type == "R":  # Result
             record["universal_test_id"] = fields[3] if len(fields) > 3 else ""
             record["test_name"] = fields[4] if len(fields) > 4 else ""
@@ -218,7 +228,8 @@ def parse_astm_record(fields: list[str], record_type: str) -> dict:
             record["instrument_id"] = fields[12] if len(fields) > 12 else ""
 
         elif record_type == "L":  # Terminator
-            record["termination_code"] = fields[1] if len(fields) > 1 else "N"
+            # L|1|N → fields[0]=L, fields[1]=sequence, fields[2]=termination_code
+            record["termination_code"] = fields[2] if len(fields) > 2 else "N"
 
     except Exception as e:
         logging.error(f"Erro ao parse registro ASTM tipo '{record_type}': {e}")
@@ -307,6 +318,16 @@ def process_astm_record(record: dict) -> None:
             logging.info(f"[ASTM] Order recebido | tag_id: {tag_id} | "
                          f"Priority: {record.get('priority', '?')} | "
                          f"Action: {record.get('action_code', '?')}")
+
+        elif record_type == "Q":
+            # Query — o equipamento PKL está perguntando se há ordens para uma amostra
+            specimen_id = record.get("specimen_id", "")
+            query_type = record.get("query_type", "")
+            logging.info(f"[ASTM] Query recebido | specimen_id: {specimen_id} | "
+                         f"query_type: {query_type} | action: {record.get('action_code', '?')}")
+            # Armazenar query para responder após o EOT
+            if specimen_id:
+                _pending_queries.append(specimen_id)
 
         elif record_type == "R":
             universal_test_id = record.get("universal_test_id", "")
@@ -640,6 +661,55 @@ def build_astm_order_message(tag_id: str, exam_data: dict) -> str:
     return "\n".join(lines)
 
 
+def respond_to_query(ser: serial.Serial, specimen_id: str) -> None:
+    """
+    Responde a uma query ASTM do PKL 125 consultando a API VIDA por ordens
+    pendentes para o specimen_id informado e enviando a resposta via serial.
+
+    Se não houver ordens pendentes, envia uma mensagem ASTM vazia (apenas H+L)
+    para que o equipamento saiba que não há trabalho a fazer.
+    """
+    logging.info(f"[Query→PKL] Consultando API por ordens para specimen_id: {specimen_id}")
+
+    # Consultar API VIDA por ordens pendentes para este specimen_id
+    poll_url = (f"https://apoio.internal.vidaexame.com/api/integration/pkl-125"
+                f"?franchise_credential_id={FRANCHISE_CREDENTIAL_ID}"
+                f"&tag_id={specimen_id}")
+
+    order_data = None
+    try:
+        response = requests.get(poll_url, timeout=15)
+        if response.status_code == 200:
+            data = response.json()
+            orders = data.get("data", [])
+            if orders and len(orders) > 0:
+                order_data = orders[0]  # Usar a primeira ordem
+                logging.info(f"[Query→PKL] Ordem encontrada para specimen_id: {specimen_id}")
+            else:
+                logging.info(f"[Query→PKL] Nenhuma ordem pendente para specimen_id: {specimen_id}")
+        else:
+            logging.warning(f"[Query→PKL] API retornou status {response.status_code} para specimen_id: {specimen_id}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"[Query→PKL] Erro ao consultar API: {type(e).__name__}: {e}")
+
+    # Construir e enviar mensagem ASTM de resposta
+    if order_data:
+        # Tem ordem — enviar H + P + O + L
+        astm_message = build_astm_order_message(specimen_id, order_data)
+        logging.info(f"[Query→PKL] Enviando ordem de exame para specimen_id: {specimen_id}")
+    else:
+        # Sem ordem — enviar mensagem vazia (H + L) para o equipamento saber que não há trabalho
+        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        astm_message = f"H|\\^&|||PKL Bridge^1.0^PKL125|||||||P|1|{timestamp}\nL|1|N"
+        logging.info(f"[Query→PKL] Enviando resposta vazia (sem ordens) para specimen_id: {specimen_id}")
+
+    success = send_astm_message_via_serial(ser, astm_message)
+    if success:
+        logging.info(f"[Query→PKL] ✓ Resposta enviada com sucesso para specimen_id: {specimen_id}")
+    else:
+        logging.error(f"[Query→PKL] ✗ Falha ao enviar resposta para specimen_id: {specimen_id}")
+
+
 def build_astm_frame(frame_number: int, content: str) -> bytes:
     """
     Constrói um frame ASTM completo em bytes:
@@ -924,12 +994,22 @@ def main():
                 except serial.SerialException as e:
                     logging.error(f"Erro ao responder ENQ: {e}")
 
-            # EOT: equipamento finaliza transmissão → finalizar sessão
+            # EOT: equipamento finaliza transmissão → finalizar sessão e responder queries
             while EOT in buffer:
                 eot_idx = buffer.find(EOT)
                 buffer = buffer[:eot_idx] + buffer[eot_idx + 1:]
                 logging.info("[ASTM] EOT detectado — finalizando sessão")
                 finalize_session()
+
+                # Se houver queries pendentes, responder ao equipamento
+                if _pending_queries and ser and ser.is_open:
+                    queries_to_respond = list(_pending_queries)
+                    _pending_queries.clear()
+                    for q_specimen_id in queries_to_respond:
+                        try:
+                            respond_to_query(ser, q_specimen_id)
+                        except Exception as e:
+                            logging.error(f"[Query→PKL] Erro ao responder query para {q_specimen_id}: {e}")
 
             # ACK: resposta do equipamento (pode vir em modo bidirecional)
             while ACK in buffer:
