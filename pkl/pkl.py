@@ -884,6 +884,7 @@ def main():
     frames_processados = 0
     ultimo_log_status = time.time()
     INTERVALO_LOG_STATUS = 300  # log de status a cada 5 minutos
+    _debug_bytes_log_interval = 0  # contador para limitar logs de bytes brutos
 
     logging.info("Escutando dados da porta serial (protocolo ASTM)...")
 
@@ -893,10 +894,58 @@ def main():
             if ser.in_waiting > 0:
                 data = ser.read(ser.in_waiting)
                 bytes_recebidos += len(data)
-                buffer += data.decode('ascii', errors='ignore')
+                decoded = data.decode('ascii', errors='ignore')
+                buffer += decoded
 
-            # Processar frames ASTM completos no buffer
-            # Um frame completo: STX ... ETX + checksum(2) + CR + LF
+                # Log dos bytes brutos recebidos (limitado para não poluir)
+                _debug_bytes_log_interval += 1
+                if _debug_bytes_log_interval <= 10 or _debug_bytes_log_interval % 50 == 0:
+                    hex_repr = ' '.join(f'{b:02X}' for b in data[:100])
+                    logging.info(f"[SERIAL] Recebidos {len(data)} bytes | Hex: {hex_repr}")
+                    logging.info(f"[SERIAL] Decodificado: {repr(decoded[:200])}")
+                    logging.info(f"[SERIAL] Buffer total: {len(buffer)} chars")
+
+            # PRIMEIRO: Processar caracteres de controle (ENQ, EOT, ACK, NAK)
+            # antes de processar frames, pois o protocolo ASTM exige resposta imediata ao ENQ
+            # Remover caracteres NUL (0x00) que o equipamento pode enviar
+            buffer_clean = buffer.replace(chr(0x00), '')
+            if buffer_clean != buffer:
+                logging.debug(f"[SERIAL] Removidos {len(buffer) - len(buffer_clean)} bytes NUL do buffer")
+                buffer = buffer_clean
+
+            # ENQ: equipamento solicita permissão para enviar → responder ACK imediatamente
+            while ENQ in buffer:
+                enq_idx = buffer.find(ENQ)
+                buffer = buffer[:enq_idx] + buffer[enq_idx + 1:]
+                try:
+                    ser.write(ACK.encode('ascii'))
+                    ser.flush()
+                    logging.info("[ASTM] ENQ detectado → ACK enviado (equipamento solicitou envio)")
+                except serial.SerialException as e:
+                    logging.error(f"Erro ao responder ENQ: {e}")
+
+            # EOT: equipamento finaliza transmissão → finalizar sessão
+            while EOT in buffer:
+                eot_idx = buffer.find(EOT)
+                buffer = buffer[:eot_idx] + buffer[eot_idx + 1:]
+                logging.info("[ASTM] EOT detectado — finalizando sessão")
+                finalize_session()
+
+            # ACK: resposta do equipamento (pode vir em modo bidirecional)
+            while ACK in buffer:
+                ack_idx = buffer.find(ACK)
+                buffer = buffer[:ack_idx] + buffer[ack_idx + 1:]
+                logging.debug("[ASTM] ACK recebido do equipamento")
+
+            # NAK: equipamento rejeitou frame
+            while NAK in buffer:
+                nak_idx = buffer.find(NAK)
+                buffer = buffer[:nak_idx] + buffer[nak_idx + 1:]
+                logging.warning("[ASTM] NAK recebido do equipamento — frame rejeitado")
+
+            # DEPOIS: Processar frames ASTM completos no buffer
+            # Formato ASTM E1394-97: STX + FN(1) + content + ETX + checksum(2) + CR + LF
+            # Alguns equipamentos enviam apenas CR (sem LF) — tratamos ambos
             while True:
                 stx_idx = buffer.find(STX)
                 if stx_idx == -1:
@@ -906,13 +955,29 @@ def main():
                 if etx_idx == -1:
                     break
 
-                # Frame mínimo: STX + FN + 1 char + ETX + 2 checksum + CR + LF = 8 chars
-                frame_end_min = etx_idx + 5  # ETX + 2 checksum + CR + LF
-                if len(buffer) <= frame_end_min:
+                # Após ETX: checksum(2 chars hex) + terminador (CR+LF ou apenas CR ou apenas LF)
+                # Mínimo após ETX: checksum(2) + CR(1) = 3 bytes
+                min_after_etx = 3  # checksum(2) + pelo menos CR ou LF
+                if len(buffer) < etx_idx + 1 + min_after_etx:
+                    # Buffer ainda não tem bytes suficientes após ETX — aguardar mais dados
                     break
 
+                # Determinar o fim do frame: ETX + checksum(2) + terminador
+                checksum_start = etx_idx + 1
+                checksum_str = buffer[checksum_start:checksum_start + 2]
+
+                # Procurar o terminador após o checksum
+                # Pode ser CR+LF, CR, ou LF
+                frame_end = checksum_start + 2  # após checksum
+                if frame_end < len(buffer) and buffer[frame_end] == CR:
+                    frame_end += 1  # consome CR
+                    if frame_end < len(buffer) and buffer[frame_end] == LF:
+                        frame_end += 1  # consome LF também
+                elif frame_end < len(buffer) and buffer[frame_end] == LF:
+                    frame_end += 1  # consome LF
+                # Se não houver terminador, ainda assim processa (alguns equipamentos não enviam)
+
                 # Extrair frame completo
-                frame_end = etx_idx + 5
                 frame_str = buffer[stx_idx:frame_end]
                 buffer = buffer[frame_end:]
 
@@ -921,6 +986,11 @@ def main():
                 if parsed is None:
                     logging.warning(f"Frame ASTM inválido ignorado: {repr(frame_str[:80])}")
                     continue
+
+                logging.info(f"[ASTM] Frame recebido | Tipo: {parsed['type']} | Seq: {parsed['seq']} | "
+                             f"Checksum: {'OK' if parsed['checksum_valid'] else 'INVÁLIDO'} "
+                             f"(recebido={parsed['checksum_received']}, calculado={parsed['checksum_calculated']}) | "
+                             f"Conteúdo: {parsed['content'][:80]}")
 
                 if not parsed["checksum_valid"]:
                     logging.warning(f"Checksum inválido no frame | Recebido: {parsed['checksum_received']} | "
@@ -949,24 +1019,19 @@ def main():
                 logging.debug(f"Frame ASTM processado | Tipo: {parsed['type']} | "
                               f"Seq: {parsed['seq']} | Checksum: OK")
 
-            # Processar caracteres de controle avulsos (ENQ, EOT)
-            # ENQ: equipamento solicita permissão para enviar → responder ACK
-            while ENQ in buffer:
-                enq_idx = buffer.find(ENQ)
-                buffer = buffer[:enq_idx] + buffer[enq_idx + 1:]
-                try:
-                    ser.write(ACK.encode('ascii'))
-                    ser.flush()
-                    logging.debug("ENQ detectado → ACK enviado")
-                except serial.SerialException as e:
-                    logging.error(f"Erro ao responder ENQ: {e}")
+            # Log de diagnóstico: se o buffer tem dados mas não formou frame
+            if buffer and len(buffer) > 0:
+                # Mostrar conteúdo do buffer para diagnóstico (limitado)
+                buffer_preview = repr(buffer[:150])
+                logging.debug(f"[SERIAL] Buffer residual ({len(buffer)} chars): {buffer_preview}")
 
-            # EOT: equipamento finaliza transmissão → finalizar sessão
-            while EOT in buffer:
-                eot_idx = buffer.find(EOT)
-                buffer = buffer[:eot_idx] + buffer[eot_idx + 1:]
-                logging.info("EOT detectado — finalizando sessão")
-                finalize_session()
+                # Se o buffer tem dados há muito tempo sem processar, alertar
+                # (pode ser que o equipamento envie formato diferente do esperado)
+                if len(buffer) > 200:
+                    logging.warning(f"[SERIAL] Buffer acumulou {len(buffer)} chars sem formar frame ASTM válido!")
+                    logging.warning(f"[SERIAL] Conteúdo (hex): {' '.join(f'{ord(c):02X}' for c in buffer[:100])}")
+                    logging.warning("[SERIAL] Possível incompatibilidade de protocolo — limpando buffer")
+                    buffer = ""
 
             # Log de status periódico (a cada 5 min)
             agora = time.time()
