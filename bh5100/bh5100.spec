@@ -11,11 +11,10 @@ a = Analysis(
         # ('imagens', 'imagens'),
     ],
     hiddenimports=[
-        # Adicione imports não detectados automaticamente, ex:
-        # 'serial',
-        # 'hl7',
         'shared.file_cleanup',
         'shared.config_loader',
+        'shared.base_analisador',
+        'shared.health_server',
     ],
     hookspath=[],
     hooksconfig={},

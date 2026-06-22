@@ -9,6 +9,8 @@ a = Analysis(
     hiddenimports=[
         'shared.file_cleanup',
         'shared.config_loader',
+        'shared.base_analisador',
+        'shared.health_server',
     ],
     hookspath=[],
     hooksconfig={},
