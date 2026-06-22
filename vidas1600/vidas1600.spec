@@ -11,6 +11,8 @@ a = Analysis(
         'shared.config_loader',
         'shared.base_analisador',
         'shared.health_server',
+        'serial',
+        'requests',
         'json',
     ],
     hookspath=[],
