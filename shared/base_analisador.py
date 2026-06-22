@@ -49,7 +49,6 @@ MAX_RETRY = 5
 RETRY_INTERVAL = 60
 MAX_ERROS_CONSECUTIVOS = 10
 MAX_TENTATIVAS_PORTA = 5
-INTERVALO_LOG_STATUS = 300  # 5 minutos
 DEFAULT_HEALTH_PORT = 8080
 
 
@@ -215,7 +214,6 @@ class SerialListener:
         self._running = True
         self._thread = Thread(target=self._read_loop, daemon=True, name="serial-listener")
         self._thread.start()
-        logging.info("Thread de leitura serial iniciada.")
 
     def stop_listening(self) -> None:
         self._running = False
@@ -227,7 +225,6 @@ class SerialListener:
 
     def _read_loop(self) -> None:
         last_activity = time.time()
-        ultimo_log_status = time.time()
 
         while self._running:
             if not self.is_port_open:
@@ -276,7 +273,7 @@ class SerialListener:
                     and self.is_port_open
                     and (time.time() - last_activity) > self._watchdog_timeout
                 ):
-                    logging.debug(
+                    logging.warning(
                         f"Watchdog: porta {self.port_name} sem atividade há "
                         f"{int(time.time() - last_activity)}s — forçando reabertura."
                     )
@@ -286,18 +283,6 @@ class SerialListener:
                         pass
                     self._serial_port = None
                     last_activity = time.time()
-
-                # Log de status periódico
-                agora = time.time()
-                if agora - ultimo_log_status >= INTERVALO_LOG_STATUS:
-                    logging.info(
-                        f"[STATUS] Porta: {self.port_name} | Aberta: {self.is_port_open} | "
-                        f"Bytes recebidos: {self.bytes_recebidos} | "
-                        f"Mensagens processadas: {self.mensagens_processadas} | "
-                        f"Buffer: {len(self._buffer)} chars | "
-                        f"Última atividade: {int(agora - last_activity)}s atrás"
-                    )
-                    ultimo_log_status = agora
 
             except Exception as ex:
                 self._buffer = ""
@@ -608,15 +593,6 @@ class BaseAnalisador:
         Usa o hook process_file() que cada máquina implementa.
         """
         extensao = self.get_file_extension()
-        logging.info("Iniciando monitor de envio para Webhook...")
-        logging.info(f"URL do Webhook: {self.WEBHOOK_URL}")
-        logging.info(
-            f"Verificando arquivos a cada {CHECK_FILES_INTERVAL}s "
-            f"na pasta: {self.GERADOS_DIR}"
-        )
-        logging.info(
-            f"Reenvio: até {MAX_RETRY} tentativas com intervalo de {RETRY_INTERVAL}s"
-        )
 
         while True:
             try:
@@ -626,10 +602,6 @@ class BaseAnalisador:
                 ]
 
                 if arquivos:
-                    logging.info(
-                        f"Encontrados {len(arquivos)} arquivo(s) "
-                        f"{extensao} para processar."
-                    )
                     self._errors_consecutive = 0
 
                 for nome_arquivo in arquivos:
@@ -650,7 +622,6 @@ class BaseAnalisador:
                         continue
 
                     if payloads is None:
-                        # Arquivo inválido/vazio — move para enviados sem processar
                         try:
                             shutil.move(caminho_origem, caminho_destino)
                         except OSError:
@@ -658,7 +629,6 @@ class BaseAnalisador:
                         continue
 
                     if not payloads:
-                        # Nada para enviar (ex: QC filtrado) — move para enviados
                         try:
                             shutil.move(caminho_origem, caminho_destino)
                         except OSError:
@@ -676,21 +646,18 @@ class BaseAnalisador:
                     if all_sent:
                         try:
                             shutil.move(caminho_origem, caminho_destino)
-                            logging.info(f"  Arquivo movido para: {caminho_destino}")
                         except OSError as e:
-                            logging.error(f"  Falha ao mover arquivo: {e}")
+                            logging.error(f"✗ Falha ao mover arquivo {nome_arquivo}: {e}")
                     else:
                         logging.error(
                             f"✗ Falha definitiva: {nome_arquivo} não foi enviado "
-                            f"após {MAX_RETRY} tentativas."
-                        )
-                        logging.error(
-                            f"  Movendo para '{self.REQUISICOES_NAO_ENVIADAS_DIR}'."
+                            f"após {MAX_RETRY} tentativas. "
+                            f"Movido para '{self.REQUISICOES_NAO_ENVIADAS_DIR}'."
                         )
                         try:
                             shutil.move(caminho_origem, caminho_nao_enviado)
                         except OSError as e:
-                            logging.error(f"  Falha ao mover arquivo: {e}")
+                            logging.error(f"✗ Falha ao mover arquivo: {e}")
 
                 self._update_health_stats()
 
@@ -713,10 +680,6 @@ class BaseAnalisador:
                 logging.critical(
                     f"⚠ ALERTA: {MAX_ERROS_CONSECUTIVOS} erros consecutivos "
                     f"no monitor de envio!"
-                )
-                logging.critical(
-                    "  Verifique: (1) Permissões das pastas (2) Espaço em disco "
-                    "(3) Conexão de rede"
                 )
                 self._errors_consecutive = 0
 
@@ -741,7 +704,6 @@ class BaseAnalisador:
                     f"Falha ao abrir porta serial {self.COM_PORT}: {e}"
                 )
                 if tentativas < MAX_TENTATIVAS_PORTA:
-                    logging.info("  Nova tentativa em 10 segundos...")
                     time.sleep(10)
             except Exception as e:
                 logging.critical(
@@ -753,14 +715,8 @@ class BaseAnalisador:
         if ser is None:
             logging.critical(
                 f"✗ NÃO FOI POSSÍVEL CONECTAR à porta {self.COM_PORT} "
-                f"após {MAX_TENTATIVAS_PORTA} tentativas."
-            )
-            logging.critical(
-                "  Verifique: (1) Cabo USB conectado? (2) Porta COM correta? "
-                "(3) Driver instalado?"
-            )
-            logging.critical(
-                "  O serviço NÃO será iniciado. Corrija o problema e reinicie."
+                f"após {MAX_TENTATIVAS_PORTA} tentativas. "
+                f"Verifique: cabo USB, porta COM, driver."
             )
         return ser
 
@@ -772,7 +728,6 @@ class BaseAnalisador:
         buffer = ""
         bytes_recebidos = 0
         mensagens_processadas = 0
-        ultimo_log_status = time.time()
 
         while True:
             try:
@@ -787,29 +742,10 @@ class BaseAnalisador:
                         mensagens_processadas += 1
                         message, buffer = self.detect_complete_message(buffer)
 
-                # Log de status periódico
-                agora = time.time()
-                if agora - ultimo_log_status >= INTERVALO_LOG_STATUS:
-                    logging.info(
-                        f"[STATUS] Porta: {self.COM_PORT} | Aberta: {ser.is_open} | "
-                        f"Bytes recebidos: {bytes_recebidos} | "
-                        f"Mensagens processadas: {mensagens_processadas} | "
-                        f"Buffer: {len(buffer)} chars"
-                    )
-                    ultimo_log_status = agora
-                    if self._health:
-                        self._health.update_stats(
-                            port_open=ser.is_open,
-                            bytes_received=bytes_recebidos,
-                            messages_processed=mensagens_processadas,
-                            buffer_size=len(buffer),
-                        )
-
                 time.sleep(READ_INTERVAL)
 
             except serial.SerialException as e:
                 logging.error(f"✗ Erro na porta serial: {e}")
-                logging.info("  Tentando reconectar em 5 segundos...")
                 time.sleep(5)
                 try:
                     ser.close()
@@ -840,9 +776,6 @@ class BaseAnalisador:
         try:
             with open(filepath, "w", encoding="utf-8", newline="") as f:
                 f.write(raw_message)
-            logging.info(
-                f"Mensagem salva: {filename} ({len(raw_message)} caracteres)"
-            )
         except OSError as e:
             logging.error(f"✗ Erro ao salvar mensagem {filename}: {e}")
             return
@@ -865,7 +798,6 @@ class BaseAnalisador:
         # Thread de envio ao webhook
         thread_envio = Thread(target=self._task_sender_to_webhook, daemon=True)
         thread_envio.start()
-        logging.info("Thread de envio iniciada.")
 
         # Health server
         self._start_health_server()
