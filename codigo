@@ -1,0 +1,2 @@
+cd c:\repositorio\leitor_hl7
+powershell -ExecutionPolicy Bypass -File .\build_all.ps1
