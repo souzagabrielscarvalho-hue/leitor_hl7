@@ -11,6 +11,18 @@
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+# Ativar o ambiente virtual
+$venvPython = Join-Path $ProjectRoot "venv\Scripts\python.exe"
+$venvActivate = Join-Path $ProjectRoot "venv\Scripts\Activate.ps1"
+
+if (Test-Path $venvActivate) {
+    Write-Host "  Ativando ambiente virtual..." -ForegroundColor Gray
+    . $venvActivate
+} else {
+    Write-Host "  AVISO: Ambiente virtual nao encontrado em $venvActivate" -ForegroundColor Yellow
+    Write-Host "  Continuando com Python do sistema..." -ForegroundColor Yellow
+}
+
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "  Build All - Leitor HL7" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
