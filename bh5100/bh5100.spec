@@ -51,9 +51,4 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # --- Opções adicionais úteis ---
-    icon='../Logo-VIDA-EXAMES-02-fixed.ico',  # Ícone do executável
-    # version='version.txt',      # Info de versão do Windows
-    # uac_admin=False,            # True = pedir privilégios de admin
-    # uac_uiaccess=False,         # Acessibilidade UI
 )

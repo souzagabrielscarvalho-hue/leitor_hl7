@@ -51,6 +51,10 @@ MAX_ERROS_CONSECUTIVOS = 10
 MAX_TENTATIVAS_PORTA = 5
 DEFAULT_HEALTH_PORT = 8080
 
+# Constantes para tratamento de erros ClearCommError na porta serial
+MAX_COMM_ERRORS = 5          # Quantos erros ClearCommError antes de forçar reabertura
+COMM_ERROR_RESET_INTERVAL = 60  # Segundos sem erro para resetar o contador
+
 
 # ═══════════════════════════════════════════════════════════════
 # UTILITÁRIOS COMPARTILHADOS
@@ -225,11 +229,14 @@ class SerialListener:
 
     def _read_loop(self) -> None:
         last_activity = time.time()
+        comm_error_count = 0
+        last_comm_error_time = 0.0
 
         while self._running:
             if not self.is_port_open:
                 self.open_port()
                 last_activity = time.time()
+                comm_error_count = 0
                 time.sleep(2)
                 continue
 
@@ -240,6 +247,7 @@ class SerialListener:
                         self._serial_port.in_waiting
                     ).decode("ascii", errors="replace")
                     self.bytes_recebidos += len(incoming)
+                    comm_error_count = 0  # Reset: dados recebidos com sucesso
 
                     with self._lock:
                         self._buffer += incoming
@@ -283,6 +291,39 @@ class SerialListener:
                         pass
                     self._serial_port = None
                     last_activity = time.time()
+                    comm_error_count = 0
+
+            except OSError as ex:
+                # ClearCommError: erro transitório do driver serial no Windows.
+                # Em vez de fechar a porta imediatamente, conta erros consecutivos
+                # e só força reabertura após MAX_COMM_ERRORS erros.
+                now = time.time()
+                if now - last_comm_error_time > COMM_ERROR_RESET_INTERVAL:
+                    comm_error_count = 0
+                comm_error_count += 1
+                last_comm_error_time = now
+
+                if comm_error_count < MAX_COMM_ERRORS:
+                    logging.warning(
+                        f"⚠ Erro transitório na porta serial ({comm_error_count}/{MAX_COMM_ERRORS}): "
+                        f"{ex}. Continuando sem reabrir."
+                    )
+                    time.sleep(0.5)
+                else:
+                    logging.error(
+                        f"✗ {MAX_COMM_ERRORS} erros ClearCommError consecutivos — "
+                        f"forçando reabertura da porta."
+                    )
+                    self._buffer = ""
+                    try:
+                        if self._serial_port and self._serial_port.is_open:
+                            self._serial_port.close()
+                            logging.info("Porta serial fechada após erros consecutivos — será reaberta.")
+                    except Exception as close_ex:
+                        logging.error(f"Erro ao fechar porta serial: {close_ex}")
+                    self._serial_port = None
+                    comm_error_count = 0
+                    time.sleep(2)  # Delay maior para evitar PermissionError
 
             except Exception as ex:
                 self._buffer = ""
@@ -293,7 +334,8 @@ class SerialListener:
                         logging.info("Porta serial fechada após erro — será reaberta.")
                 except Exception as close_ex:
                     logging.error(f"Erro ao fechar porta serial: {close_ex}")
-                time.sleep(1)
+                self._serial_port = None
+                time.sleep(2)  # Delay maior para evitar PermissionError
 
         self.last_activity = last_activity
 
