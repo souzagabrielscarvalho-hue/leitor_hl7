@@ -60,14 +60,14 @@ foreach ($m in $maquinas) {
 
     # Executar PyInstaller a partir do diretório do spec (para pathex funcionar)
     Push-Location (Join-Path $ProjectRoot $specDir)
-    try {
-        pyinstaller --noconfirm --clean $specPath 2>&1 | Out-Null
-        Pop-Location
-    }
-    catch {
-        Pop-Location
-        Write-Host " ERRO" -ForegroundColor Red
-        Write-Host "    Detalhes: $_" -ForegroundColor Red
+    $ErrorActionPreference = "Continue"
+    pyinstaller --noconfirm --clean $specPath 2>&1 | Out-Null
+    $buildResult = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    Pop-Location
+
+    if ($buildResult -ne 0) {
+        Write-Host " ERRO (exit code: $buildResult)" -ForegroundColor Red
         continue
     }
 
