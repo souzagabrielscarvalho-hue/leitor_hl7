@@ -112,7 +112,7 @@ OPERADOR (CARLOS)"""
         'PatientID': '201801210001',
         'Operator': 'CARLOS',
         'Laboratory': 'NOME DO LAB',
-        'ExamCode': 'COAG',
+        'ExamCode': 'TAP',
         'Status': 'SUCCESS'
     }
     

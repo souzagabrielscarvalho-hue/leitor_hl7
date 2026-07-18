@@ -10,7 +10,6 @@ import sys
 import re
 import json
 import logging
-import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 # Adiciona raiz do projeto ao path para importar shared
@@ -201,6 +200,7 @@ def parse_coagmaster_exam(text: str) -> Dict[str, str]:
         exam_type = result.get('ExamType', '')
         exam_code_map = {
             'TP': 'TAP',           # TEMPO DE PROTROMBINA
+            'TAP': 'TAP',          # TEMPO DE PROTROMBINA (enviado diretamente)
             'TTPA': 'KPTT',        # TEMPO DE TROMBOPLASTINA PARCIAL ATIVADO
             'APTT': 'KPTT',        # TEMPO DE TROMBOPLASTINA PARCIAL ATIVADO
             'FIB': 'FIBRI',        # FIBRINOGÊNIO
@@ -273,13 +273,12 @@ class AnalisadorCoagmaster(BaseAnalisador):
         self, filepath: str, nome_arquivo: str
     ) -> Optional[List[Dict[str, Any]]]:
         """
-        Processa arquivo .log: separa exames, parseia cada um, filtra falhas.
-        Retorna lista de payloads (um por exame válido).
+        Processa arquivo .log: lê o texto bruto, separa os exames,
+        faz o parse de cada um e retorna a lista de payloads.
         """
-        # Lê o arquivo
         try:
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                conteudo_log = f.read()
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
         except PermissionError:
             logging.error(f"✗ Permissão negada ao ler: {nome_arquivo}")
             return None
@@ -290,68 +289,37 @@ class AnalisadorCoagmaster(BaseAnalisador):
             logging.error(f"✗ Erro ao ler {nome_arquivo}: {type(e).__name__}: {e}")
             return None
 
-        if not conteudo_log or not conteudo_log.strip():
-            logging.warning(f"Arquivo {nome_arquivo} está vazio.")
-            return None
+        if not content or not content.strip():
+            logging.warning(f"✗ {nome_arquivo}: arquivo vazio.")
+            return []
 
-        # Separa exames individuais
-        exames = split_exams_from_log(conteudo_log)
+        exames = split_exams_from_log(content)
         if not exames:
-            logging.warning(f"Nenhum exame encontrado em {nome_arquivo}")
-            return None
-
-        logging.info(f"Encontrados {len(exames)} exame(s) em {nome_arquivo}")
+            logging.warning(f"✗ {nome_arquivo}: nenhum exame encontrado no log.")
+            return []
 
         payloads: List[Dict[str, Any]] = []
-        pasta_json = os.path.join(self.ENVIADOS_DIR, "txt")
-        os.makedirs(pasta_json, exist_ok=True)
-
-        for i, exame_texto in enumerate(exames, 1):
+        for exame_texto in exames:
             payload = parse_coagmaster_exam(exame_texto)
             if not payload:
-                logging.warning(f"Exame {i} inválido em {nome_arquivo}, ignorando.")
                 continue
 
-            # Verifica FileName (tag_identifier)
-            if not payload.get('FileName'):
-                logging.error(
-                    f"✗ Exame {i} de {nome_arquivo}: FileName vazio — "
-                    f"impossível identificar o procedimento."
-                )
-                continue
-
-            # Exame com falha (TEMPO: FALHOU!) — não envia
             if payload.get('Status') == 'FAILED':
                 logging.warning(
-                    f"⚠ Exame {i} de {nome_arquivo} "
-                    f"(tag: {payload.get('FileName')}) FALHOU — não será enviado."
+                    f"Exame {payload.get('ExamNumber', '?')} FALHOU — ignorado."
                 )
-                # Salva JSON de falha na pasta de não enviados
-                pasta_falha = os.path.join(self.REQUISICOES_NAO_ENVIADAS_DIR, "txt")
-                os.makedirs(pasta_falha, exist_ok=True)
-                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                nome_falha = f"{os.path.splitext(nome_arquivo)[0]}_exame_{i}_{ts}.json"
-                try:
-                    with open(os.path.join(pasta_falha, nome_falha), "w", encoding="utf-8") as f:
-                        json.dump(payload, f, indent=2, ensure_ascii=False)
-                    logging.info(f"  JSON de falha salvo: {nome_falha}")
-                except Exception as e:
-                    logging.warning(f"  Erro ao salvar JSON de falha: {e}")
                 continue
 
-            # Salva JSON de referência
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            nome_json = f"{os.path.splitext(nome_arquivo)[0]}_exame_{i}_{ts}.json"
-            try:
-                with open(os.path.join(pasta_json, nome_json), "w", encoding="utf-8") as f:
-                    json.dump(payload, f, indent=2, ensure_ascii=False)
-                logging.info(f"JSON salvo: {nome_json}")
-            except Exception as e:
-                logging.warning(f"Erro ao salvar JSON: {e}")
+            if not payload.get('FileName'):
+                logging.error(
+                    f"Exame {payload.get('ExamNumber', '?')}: "
+                    f"FileName (tag_identifier) não encontrado — ignorado."
+                )
+                continue
 
             payloads.append(payload)
 
-        return payloads if payloads else []
+        return payloads
 
 
 # ═══════════════════════════════════════════════════════════
