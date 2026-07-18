@@ -6,7 +6,7 @@ Centraliza:
 - Thread de envio ao webhook (task_sender_to_webhook)
 - Envio HTTP com retry (_enviar_payload_webhook)
 - Servidor HTTP de health check
-- SerialListener com watchdog/keepalive (opcional)
+- SerialListener com keepalive (opcional)
 - Loop serial simples (opcional)
 - Utilitários compartilhados (format_thousands, extrair_imagens_de_hl7)
 
@@ -153,12 +153,12 @@ def extrair_imagens_de_hl7(conteudo_hl7: str, pasta_destino: str, prefixo: str =
 
 
 # ═══════════════════════════════════════════════════════════════
-# SERIAL LISTENER (com watchdog/keepalive opcionais)
+# SERIAL LISTENER (com keepalive opcional)
 # ═══════════════════════════════════════════════════════════════
 
 class SerialListener:
     """
-    Listener de porta serial com suporte opcional a watchdog e keepalive.
+    Listener de porta serial com suporte opcional a keepalive.
 
     Usado por MEK7300 e PKL. Máquinas mais simples (BH5100, Coagmaster,
     VIDAS1600) usam loop serial inline no BaseAnalisador.
@@ -170,8 +170,6 @@ class SerialListener:
         baud_rate: int,
         detect_complete_message: Callable[[str], Tuple[Optional[str], str]],
         on_message: Callable[[str], None],
-        enable_watchdog: bool = False,
-        watchdog_timeout: int = 60,
         enable_keepalive: bool = False,
         keepalive_interval: int = 90,
     ) -> None:
@@ -179,8 +177,6 @@ class SerialListener:
         self.baud_rate = baud_rate
         self._detect_complete_message = detect_complete_message
         self._on_message = on_message
-        self._enable_watchdog = enable_watchdog
-        self._watchdog_timeout = watchdog_timeout
         self._enable_keepalive = enable_keepalive
         self._keepalive_interval = keepalive_interval
 
@@ -275,24 +271,6 @@ class SerialListener:
                     except Exception:
                         pass
 
-                # Watchdog (opcional)
-                if (
-                    self._enable_watchdog
-                    and self.is_port_open
-                    and (time.time() - last_activity) > self._watchdog_timeout
-                ):
-                    logging.warning(
-                        f"Watchdog: porta {self.port_name} sem atividade há "
-                        f"{int(time.time() - last_activity)}s — forçando reabertura."
-                    )
-                    try:
-                        self._serial_port.close()
-                    except Exception:
-                        pass
-                    self._serial_port = None
-                    last_activity = time.time()
-                    comm_error_count = 0
-
             except OSError as ex:
                 # ClearCommError: erro transitório do driver serial no Windows.
                 # Em vez de fechar a porta imediatamente, conta erros consecutivos
@@ -355,7 +333,6 @@ class BaseAnalisador:
         health_port: Porta do servidor HTTP de health check (0 = desabilitado).
         console_logging: Se True, adiciona StreamHandler ao logging.
         redirect_stdout: Se True, redireciona stdout/stderr para devnull.
-        enable_watchdog: Se True, ativa watchdog no SerialListener.
         enable_keepalive: Se True, ativa keepalive no SerialListener.
         use_serial_listener: Se True, usa SerialListener; senão, loop inline.
     """
@@ -368,7 +345,6 @@ class BaseAnalisador:
         health_port: int = DEFAULT_HEALTH_PORT,
         console_logging: bool = False,
         redirect_stdout: bool = True,
-        enable_watchdog: bool = False,
         enable_keepalive: bool = False,
         use_serial_listener: bool = False,
     ) -> None:
@@ -377,7 +353,6 @@ class BaseAnalisador:
         self._health_port = health_port
         self._console_logging = console_logging
         self._redirect_stdout = redirect_stdout
-        self._enable_watchdog = enable_watchdog
         self._enable_keepalive = enable_keepalive
         self._use_serial_listener = use_serial_listener
 
@@ -857,7 +832,6 @@ class BaseAnalisador:
             baud_rate=self.BAUD_RATE,
             detect_complete_message=self.detect_complete_message,
             on_message=self._on_serial_message,
-            enable_watchdog=self._enable_watchdog,
             enable_keepalive=self._enable_keepalive,
         )
 

@@ -196,7 +196,24 @@ def parse_coagmaster_exam(text: str) -> Dict[str, str]:
 
         # Campos obrigatórios para o webhook
         result['FileName'] = result.get('PatientID', '') or result.get('ExamNumber', '')
-        result['ExamCode'] = 'COAGU'
+
+        # Mapeia ExamType → ExamCode (código real do exame no banco)
+        exam_type = result.get('ExamType', '')
+        exam_code_map = {
+            'TP': 'TAP',           # TEMPO DE PROTROMBINA
+            'TTPA': 'KPTT',        # TEMPO DE TROMBOPLASTINA PARCIAL ATIVADO
+            'APTT': 'KPTT',        # TEMPO DE TROMBOPLASTINA PARCIAL ATIVADO
+            'FIB': 'FIBRI',        # FIBRINOGÊNIO
+            'FIBRINOGENIO': 'FIBRI',  # FIBRINOGÊNIO
+            'TT': 'TCO',           # TEMPO DE COAGULAÇÃO (TROMBINA)
+            'TROMBINA': 'TCO',     # TEMPO DE COAGULAÇÃO (TROMBINA)
+        }
+        result['ExamCode'] = exam_code_map.get(exam_type, 'COAGU')
+        if exam_type and exam_type not in exam_code_map:
+            logging.warning(
+                f"Tipo de exame desconhecido: '{exam_type}' — "
+                f"usando fallback 'COAGU'. Verifique se o código existe no banco."
+            )
 
         if 'FALHOU' in text.upper():
             result['Status'] = 'FAILED'

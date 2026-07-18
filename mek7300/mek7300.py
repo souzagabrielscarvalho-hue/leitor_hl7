@@ -1,7 +1,7 @@
 ﻿"""
 Analisador MEK7300 — Integração via porta serial (protocolo delimitado por ETX).
 
-Herda de BaseAnalisador com SerialListener, watchdog e keepalive ativados.
+Herda de BaseAnalisador com SerialListener e keepalive ativados.
 Implementa apenas os hooks específicos do protocolo do MEK7300.
 """
 
@@ -339,6 +339,5 @@ if __name__ == "__main__":
         },
         health_port=8082,
         use_serial_listener=True,
-        enable_watchdog=True,
         enable_keepalive=True,
     ).start()

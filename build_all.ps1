@@ -153,6 +153,13 @@ if ([string]::IsNullOrWhiteSpace($status)) {
 
 # Push
 Write-Host "  Enviando para o repositorio..." -ForegroundColor White
+
+# Push para o remote 'origin' (repositorio principal)
+Write-Host "  -> origin..." -ForegroundColor White
+git push origin main
+
+# Push para o remote 'personal' (mirror)
+Write-Host "  -> personal..." -ForegroundColor White
 git push personal main
 
 Pop-Location
