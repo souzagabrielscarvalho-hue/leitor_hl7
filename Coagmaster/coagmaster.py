@@ -200,7 +200,6 @@ def parse_coagmaster_exam(text: str) -> Dict[str, str]:
         exam_type = result.get('ExamType', '')
         exam_code_map = {
             'TP': 'TAP',           # TEMPO DE PROTROMBINA
-            'TAP': 'TAP',          # TEMPO DE PROTROMBINA (enviado diretamente)
             'TTPA': 'KPTT',        # TEMPO DE TROMBOPLASTINA PARCIAL ATIVADO
             'APTT': 'KPTT',        # TEMPO DE TROMBOPLASTINA PARCIAL ATIVADO
             'FIB': 'FIBRI',        # FIBRINOGÊNIO
@@ -235,7 +234,7 @@ class AnalisadorCoagmaster(BaseAnalisador):
     """Analisador para equipamento Coagmaster via log proprietário."""
 
     def get_file_extension(self) -> str:
-        return '.log'
+        return '.txt'
 
     def detect_complete_message(self, buffer: str) -> Tuple[Optional[str], str]:
         """
@@ -269,57 +268,78 @@ class AnalisadorCoagmaster(BaseAnalisador):
 
         return None, buffer
 
+    def _on_serial_message(self, raw_message: str) -> None:
+        """
+        Sobrescreve o comportamento padrão: processa o log recebido,
+        separa os exames e salva um arquivo .txt por exame em gerados/.
+        Nome do arquivo = tag_identifier (barcode), igual ao MEK7300.
+        """
+        logging.info(f"Dados completos recebidos ({len(raw_message)} caracteres)")
+
+        exames = split_exams_from_log(raw_message)
+        if not exames:
+            logging.warning("Nenhum exame encontrado no log recebido.")
+            return
+
+        logging.info(f"Encontrados {len(exames)} exame(s) no log.")
+
+        for i, exame_texto in enumerate(exames, 1):
+            payload = parse_coagmaster_exam(exame_texto)
+            if not payload:
+                logging.warning(f"Exame {i} inválido, ignorando.")
+                continue
+
+            tag = payload.get('FileName', '')
+            if not tag:
+                logging.error(f"Exame {i}: FileName vazio, ignorando.")
+                continue
+
+            # Exames com falha não são salvos para envio
+            if payload.get('Status') == 'FAILED':
+                logging.warning(f"Exame {i} (tag: {tag}) FALHOU — ignorado.")
+                continue
+
+            # Salva como .txt (JSON internamente) — nome = barcode
+            filename = f"{tag}.txt"
+            filepath = os.path.join(self.GERADOS_DIR, filename)
+
+            try:
+                with open(filepath, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False)
+                logging.info(f"Arquivo '{filename}' criado com sucesso.")
+            except OSError as e:
+                logging.error(f"Erro ao salvar {filename}: {e}")
+
     def process_file(
         self, filepath: str, nome_arquivo: str
     ) -> Optional[List[Dict[str, Any]]]:
         """
-        Processa arquivo .log: lê o texto bruto, separa os exames,
-        faz o parse de cada um e retorna a lista de payloads.
+        Processa arquivo .txt: lê o JSON e retorna o payload.
+        Formato simples, igual ao MEK7300.
         """
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
-                content = f.read()
+                payload = json.load(f)
         except PermissionError:
             logging.error(f"✗ Permissão negada ao ler: {nome_arquivo}")
             return None
         except FileNotFoundError:
             logging.warning(f"Arquivo {nome_arquivo} não encontrado.")
             return None
+        except json.JSONDecodeError as e:
+            logging.error(f"✗ Erro ao decodificar JSON de {nome_arquivo}: {e}")
+            return None
         except Exception as e:
             logging.error(f"✗ Erro ao ler {nome_arquivo}: {type(e).__name__}: {e}")
             return None
 
-        if not content or not content.strip():
-            logging.warning(f"✗ {nome_arquivo}: arquivo vazio.")
+        if not payload or not payload.get('FileName'):
+            logging.error(
+                f"✗ {nome_arquivo}: FileName (tag_identifier) não encontrado."
+            )
             return []
 
-        exames = split_exams_from_log(content)
-        if not exames:
-            logging.warning(f"✗ {nome_arquivo}: nenhum exame encontrado no log.")
-            return []
-
-        payloads: List[Dict[str, Any]] = []
-        for exame_texto in exames:
-            payload = parse_coagmaster_exam(exame_texto)
-            if not payload:
-                continue
-
-            if payload.get('Status') == 'FAILED':
-                logging.warning(
-                    f"Exame {payload.get('ExamNumber', '?')} FALHOU — ignorado."
-                )
-                continue
-
-            if not payload.get('FileName'):
-                logging.error(
-                    f"Exame {payload.get('ExamNumber', '?')}: "
-                    f"FileName (tag_identifier) não encontrado — ignorado."
-                )
-                continue
-
-            payloads.append(payload)
-
-        return payloads
+        return [payload]
 
 
 # ═══════════════════════════════════════════════════════════
