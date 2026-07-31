@@ -51,7 +51,7 @@ MAPEAMENTO = {
     'MCV':  'MCV',
     'MCH':  'MCH',
     'MCHC': 'MCHC',
-    'RDW_CV':'RDW_CV',
+    'RDW_CV':'RDW',
     'RDW_SD':'RDW_SD',
     'PLT':  'PLT',
     'PCT':  'PCT',
@@ -74,7 +74,7 @@ PERCENT_PAIRS = [
 ORDEM_TXT = [
     'WBC', 'NE', 'NE_Percent', 'LY', 'LY_Percent',
     'MO', 'MO_Percent', 'EO', 'EO_Percent', 'BA', 'BA_Percent',
-    'RBC', 'HGB', 'HCT', 'MCV', 'MCH', 'MCHC', 'RDW_CV', 'RDW_SD',
+    'RBC', 'HGB', 'HCT', 'MCV', 'MCH', 'MCHC', 'RDW', 'RDW_SD',
     'PLT', 'PCT', 'MPV', 'PDW', 'P_LCR', 'P_LCC',
 ]
 

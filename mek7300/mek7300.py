@@ -143,7 +143,7 @@ def create_initialization_file(data_received: str, gerados_dir: str) -> bool:
             "MCV": data[15],
             "MCH": data[16],
             "MCHC": data[17],
-            "RDW_CV": data[18],
+            "RDW": data[18],
             "PLT": format_thousands_mek(multiply_by_1000(data[19])),
             "PCT": data[20],
             "MPV": data[21],
@@ -184,7 +184,7 @@ def _save_formatted_file(formated_file: dict, gerados_dir: str) -> bool:
             f.write(f"MCV: {formated_file['MCV']}\r\n")
             f.write(f"MCH: {formated_file['MCH']}\r\n")
             f.write(f"MCHC: {formated_file['MCHC']}\r\n")
-            f.write(f"RDW_CV: {formated_file['RDW_CV']}\r\n")
+            f.write(f"RDW: {formated_file['RDW']}\r\n")
             f.write(f"PLT: {formated_file['PLT']}\r\n")
             f.write(f"PCT: {formated_file['PCT']}\r\n")
             f.write(f"MPV: {formated_file['MPV']}\r\n")
