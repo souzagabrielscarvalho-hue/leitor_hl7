@@ -63,7 +63,7 @@ MAPEAMENTO = {
 }
 
 CAMPOS_ABSOLUTOS = {'WBC', 'NE', 'LY', 'MO', 'EO', 'BA', 'PLT'}
-CAMPOS_MULTIPLICAR = ('WBC', 'PLT')
+CAMPOS_MULTIPLICAR = ('WBC', 'LY', 'MO', 'NE', 'EO', 'BA', 'PLT')
 PERCENT_PAIRS = [
     ('LY_Percent', 'LY'),
     ('MO_Percent', 'MO'),
