@@ -206,6 +206,8 @@ def parse_coagmaster_exam(text: str) -> Dict[str, str]:
             'FIBRINOGENIO': 'FIBRI',  # FIBRINOGÊNIO
             'TT': 'TCO',           # TEMPO DE COAGULAÇÃO (TROMBINA)
             'TROMBINA': 'TCO',     # TEMPO DE COAGULAÇÃO (TROMBINA)
+            'COAG': 'COAG',      # ← adicionado
+            'COAGU': 'COAGU',
         }
         result['ExamCode'] = exam_code_map.get(exam_type, 'COAGU')
         if exam_type and exam_type not in exam_code_map:
