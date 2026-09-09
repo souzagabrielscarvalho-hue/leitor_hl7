@@ -132,7 +132,7 @@ O arquivo `config_<máquina>.json` contém a configuração da porta serial. Exe
 | Arquivos em `requisições não enviadas/` | Falha definitiva de envio (5 tentativas esgotadas) | Verifique o log para o erro específico; corrija e reinicie o serviço |
 | Erro `ClearCommError` no log | Problema transitório no driver serial do Windows | O sistema tenta recuperar automaticamente; se persistir, reconecte o cabo |
 | Erro 401/403 no webhook | `franchise_credential_id` inválido | Verifique o `config_*.json` e confirme o credential ID com o suporte |
-| Log com "NÃO FOI POSSÍVEL CONECTAR à porta COM" | Porta COM inexistente ou em uso por outro programa | Confira a porta no Gerenciador de Dispositivos; feche outros programas que usem a porta serial |
+| Log com "Falha ao abrir porta serial" | Porta COM inexistente ou em uso por outro programa | Confira a porta no Gerenciador de Dispositivos; feche outros programas que usem a porta serial. O sistema continua tentando reconectar automaticamente |
 
 ---
 

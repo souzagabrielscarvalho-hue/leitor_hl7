@@ -49,6 +49,7 @@ MAX_RETRY = 5
 RETRY_INTERVAL = 60
 MAX_ERROS_CONSECUTIVOS = 10
 MAX_TENTATIVAS_PORTA = 5
+RECONNECT_INTERVAL = 10  # Segundos entre tentativas de reconexão da porta serial
 DEFAULT_HEALTH_PORT = 8080
 
 # Constantes para tratamento de erros ClearCommError na porta serial
@@ -705,11 +706,15 @@ class BaseAnalisador:
 
     # ── SERIAL ─────────────────────────────────────────────────
 
-    def _open_serial_direct(self) -> Optional[serial.Serial]:
-        """Abre porta serial diretamente (modo simples)."""
+    def _open_serial_direct(self) -> serial.Serial:
+        """
+        Abre porta serial diretamente (modo simples), reconectando infinitamente.
+
+        Nunca desiste: se a porta não abrir (cabo desconectado, driver, suspensão
+        do Windows), tenta novamente após RECONNECT_INTERVAL segundos.
+        """
         tentativas = 0
-        ser = None
-        while ser is None and tentativas < MAX_TENTATIVAS_PORTA:
+        while True:
             try:
                 ser = serial.Serial(self.COM_PORT, self.BAUD_RATE, timeout=0.1)
                 logging.info(f"✓ Conectado à porta {self.COM_PORT} com sucesso.")
@@ -717,30 +722,37 @@ class BaseAnalisador:
             except serial.SerialException as e:
                 tentativas += 1
                 logging.error(
-                    f"✗ Tentativa {tentativas}/{MAX_TENTATIVAS_PORTA}: "
-                    f"Falha ao abrir porta serial {self.COM_PORT}: {e}"
+                    f"✗ Tentativa {tentativas}: Falha ao abrir porta serial "
+                    f"{self.COM_PORT}: {e}. Tentando novamente em "
+                    f"{RECONNECT_INTERVAL}s..."
                 )
-                if tentativas < MAX_TENTATIVAS_PORTA:
-                    time.sleep(10)
+                time.sleep(RECONNECT_INTERVAL)
             except Exception as e:
+                tentativas += 1
                 logging.critical(
                     f"✗ Erro inesperado ao abrir porta serial: "
-                    f"{type(e).__name__}: {e}"
+                    f"{type(e).__name__}: {e}. Tentando novamente em "
+                    f"{RECONNECT_INTERVAL}s..."
                 )
-                return None
+                time.sleep(RECONNECT_INTERVAL)
 
+    def _close_serial_handle(self, ser: Optional[serial.Serial]) -> None:
+        """Fecha o handle serial com segurança, ignorando erros."""
         if ser is None:
-            logging.critical(
-                f"✗ NÃO FOI POSSÍVEL CONECTAR à porta {self.COM_PORT} "
-                f"após {MAX_TENTATIVAS_PORTA} tentativas. "
-                f"Verifique: cabo USB, porta COM, driver."
-            )
-        return ser
+            return
+        try:
+            if ser.is_open:
+                ser.close()
+        except Exception:
+            pass
 
     def _serial_read_loop_simple(self, ser: serial.Serial) -> None:
         """
         Loop serial inline para máquinas simples (BH5100, Coagmaster, VIDAS1600).
         Chama detect_complete_message() e on_message() como hooks.
+
+        Em caso de queda da conexão (USB desconectado, driver, suspensão do
+        Windows), fecha o handle, descarta o objeto e reconecta infinitamente.
         """
         buffer = ""
         bytes_recebidos = 0
@@ -761,20 +773,16 @@ class BaseAnalisador:
 
                 time.sleep(READ_INTERVAL)
 
-            except serial.SerialException as e:
-                logging.error(f"✗ Erro na porta serial: {e}")
-                time.sleep(5)
-                try:
-                    ser.close()
-                except Exception:
-                    pass
-                try:
-                    ser.open()
-                    logging.info(f"✓ Reconectado à porta {self.COM_PORT}.")
-                    buffer = ""
-                except Exception as ex:
-                    logging.error(f"✗ Falha na reconexão: {ex}")
-                    time.sleep(5)
+            except (serial.SerialException, OSError) as e:
+                logging.error(
+                    f"✗ Conexão serial perdida ({type(e).__name__}: {e}). "
+                    f"Reconectando..."
+                )
+                self._close_serial_handle(ser)
+                buffer = ""
+                ser = self._open_serial_direct()
+                self._serial = ser
+                logging.info(f"✓ Reconectado à porta {self.COM_PORT}.")
 
             except Exception as e:
                 logging.error(f"✗ Erro no loop serial: {type(e).__name__}: {e}")
@@ -836,8 +844,10 @@ class BaseAnalisador:
         )
 
         if not self._listener.open_port():
-            logging.critical("Não foi possível abrir a porta serial. Encerrando.")
-            return
+            logging.warning(
+                f"Não foi possível abrir a porta serial {self.COM_PORT} agora. "
+                f"O sistema continuará tentando reconectar automaticamente."
+            )
 
         self._listener.start_listening()
 
@@ -878,9 +888,8 @@ class BaseAnalisador:
 
     def _start_with_serial_direct(self) -> None:
         """Inicia com loop serial inline (BH5100, Coagmaster, VIDAS1600)."""
+        # _open_serial_direct reconecta infinitamente; nunca retorna None.
         ser = self._open_serial_direct()
-        if ser is None:
-            return
 
         # Armazena referência para _send_ack
         self._serial = ser
