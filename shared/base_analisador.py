@@ -394,6 +394,7 @@ class BaseAnalisador:
         self.COM_PORT = _config["com_port"]
         self.BAUD_RATE = _config["baud_rate"]
         self.FRANCHISE_CREDENTIAL_ID = _config.get("franchise_credential_id", "")
+        self.PKL_MACHINE_ID = _config.get("pkl_machine_id", "")
         self.WEBHOOK_URL = _config["webhook_url"].format(
             franchise_credential_id=self.FRANCHISE_CREDENTIAL_ID
         )

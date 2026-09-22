@@ -43,8 +43,9 @@ LF  = chr(0x0A)
 ENABLE_BIDIRECTIONAL = True
 POLL_ORDERS_INTERVAL = 30  # segundos
 ORDERS_API_URL = (
-    "https://apoio.internal.vidaexame.com/api/integration/pkl-125/orders"
+    "https://apoio.internal.vidaexame.com/api/integration/pkl-125"
     "?franchise_credential_id={franchise_credential_id}"
+    "\u0026tag_id={tag_id}"
 )
 
 
@@ -280,6 +281,7 @@ def finalize_session(gerados_dir: str) -> None:
         payload = {
             "franchise_credential_id": "",  # será preenchido pelo task_sender
             "tag_id": tag_id,
+            "pkl_machine_id": "",           # será preenchido pelo task_sender
             "results": batch["results"],
         }
 
@@ -384,19 +386,35 @@ def _wait_for_byte(ser: serial.Serial, expected: List[str], timeout: float = 3) 
 
 def respond_to_query(ser: serial.Serial, specimen_id: str, franchise_id: str) -> None:
     try:
-        url = ORDERS_API_URL.format(franchise_credential_id=franchise_id)
-        resp = requests.get(url, params={"specimen_id": specimen_id}, timeout=10)
+        url = ORDERS_API_URL.format(franchise_credential_id=franchise_id, tag_id=specimen_id)
+        resp = requests.get(url, timeout=10)
         if resp.status_code != 200:
             logging.warning(f"[BIDIREC] API de ordens retornou {resp.status_code}")
             return
 
         data = resp.json()
-        tests = data.get("tests", [])
-        patient = data.get("patient", {})
+        codes = data.get("data", [])
 
-        if not tests:
+        if not codes:
             logging.info(f"[BIDIREC] Nenhuma ordem pendente para {specimen_id}")
             return
+
+        # Extrai patient do primeiro item (todos têm os mesmos dados)
+        first = codes[0]
+        patient = {
+            "patient_id": specimen_id,
+            "first_name": first.get("patient_name", ""),
+            "birth_date": first.get("birth_date", ""),
+            "gender": first.get("gender", ""),
+        }
+
+        # Monta lista de tests para o equipamento
+        tests = []
+        for item in codes:
+            tests.append({
+                "exam_code": item.get("exam_code", ""),
+                "test": item.get("test", ""),
+            })
 
         logging.info(
             f"[BIDIREC] {len(tests)} ordem(ns) encontrada(s) para {specimen_id}"
@@ -483,8 +501,10 @@ class AnalisadorPKL125(BaseAnalisador):
             logging.warning(f"Arquivo {nome_arquivo} sem tag_id — ignorando.")
             return None
 
-        # Injeta franchise_credential_id
+        # Injeta franchise_credential_id e pkl_machine_id
         payload["franchise_credential_id"] = self.FRANCHISE_CREDENTIAL_ID
+        if getattr(self, 'PKL_MACHINE_ID', ''):
+            payload["pkl_machine_id"] = self.PKL_MACHINE_ID
 
         # Salva TXT debug
         try:
@@ -575,6 +595,7 @@ if __name__ == "__main__":
             'com_port': 'COM3',
             'baud_rate': 19200,
             'franchise_credential_id': '4e768395-1b2c-4d3e-8f9a-5c6d7e8f9a0b',
+            'pkl_machine_id': '',
             'webhook_url': (
                 'https://apoio.internal.vidaexame.com/api/integration/pkl-125'
                 '?franchise_credential_id={franchise_credential_id}'
