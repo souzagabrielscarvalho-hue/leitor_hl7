@@ -45,8 +45,7 @@ POLL_ORDERS_INTERVAL = 30  # segundos
 ORDERS_API_URL = (
     "https://apoio.internal.vidaexame.com/api/integration/pkl-125"
     "?franchise_credential_id={franchise_credential_id}"
-    "\u0026tag_id={tag_id}"
-)
+    "\u0026tag_id={tag_id}"    "&pkl_machine_id={pkl_machine_id}")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -169,7 +168,7 @@ def parse_universal_test_id(universal_test_id: str, test_name: str = "") -> Tupl
 # GERENCIAMENTO DE SESSÃO ASTM
 # ═══════════════════════════════════════════════════════════
 
-def process_astm_record(record: dict, gerados_dir: str) -> None:
+def process_astm_record(record: dict, gerados_dir: str, serial_port: Any = None, franchise_id: str = "") -> None:
     global _current_tag_id, _session_patient
 
     record_type = record.get("type", "")
@@ -215,7 +214,12 @@ def process_astm_record(record: dict, gerados_dir: str) -> None:
                 f"[ASTM] Query recebido | specimen_id: {specimen_id} | "
                 f"query_type: {record.get('query_type', '')}"
             )
-            if specimen_id:
+            if specimen_id and serial_port and franchise_id:
+                # Processa Query IMEDIATAMENTE (não espera thread de polling)
+                logging.info(f"[BIDIREC] Processando Query imediatamente para {specimen_id}")
+                respond_to_query(serial_port, specimen_id, franchise_id)
+            elif specimen_id:
+                # Fallback: guarda para thread de polling
                 _pending_queries.append(specimen_id)
         elif record_type == "R":
             universal_test_id = record.get("universal_test_id", "")
@@ -384,9 +388,13 @@ def _wait_for_byte(ser: serial.Serial, expected: List[str], timeout: float = 3) 
     return None
 
 
-def respond_to_query(ser: serial.Serial, specimen_id: str, franchise_id: str) -> None:
+def respond_to_query(ser: serial.Serial, specimen_id: str, franchise_id: str, pkl_machine_id: str = "") -> None:
     try:
-        url = ORDERS_API_URL.format(franchise_credential_id=franchise_id, tag_id=specimen_id)
+        url = ORDERS_API_URL.format(
+            franchise_credential_id=franchise_id,
+            tag_id=specimen_id,
+            pkl_machine_id=pkl_machine_id or ""
+        )
         resp = requests.get(url, timeout=10)
         if resp.status_code != 200:
             logging.warning(f"[BIDIREC] API de ordens retornou {resp.status_code}")
@@ -472,7 +480,12 @@ class AnalisadorPKL125(BaseAnalisador):
             )
 
         record = parse_astm_record(frame["fields"], frame["type"])
-        process_astm_record(record, self.GERADOS_DIR)
+        # Passa serial_port e franchise_id para processar Query imediatamente
+        process_astm_record(
+            record, self.GERADOS_DIR,
+            serial_port=self._listener._serial_port if self._listener else None,
+            franchise_id=self.FRANCHISE_CREDENTIAL_ID
+        )
 
     def process_file(
         self, filepath: str, nome_arquivo: str
@@ -574,6 +587,7 @@ class AnalisadorPKL125(BaseAnalisador):
                             self._listener._serial_port,
                             specimen_id,
                             self.FRANCHISE_CREDENTIAL_ID,
+                            self.PKL_MACHINE_ID,
                         )
 
                 self._update_health_stats()

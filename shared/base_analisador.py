@@ -395,6 +395,9 @@ class BaseAnalisador:
         self.BAUD_RATE = _config["baud_rate"]
         self.FRANCHISE_CREDENTIAL_ID = _config.get("franchise_credential_id", "")
         self.PKL_MACHINE_ID = _config.get("pkl_machine_id", "")
+        # Log se pkl_machine_id estiver configurado
+        if self.PKL_MACHINE_ID:
+            logging.info(f"PKL Machine ID configurado: {self.PKL_MACHINE_ID}")
         self.WEBHOOK_URL = _config["webhook_url"].format(
             franchise_credential_id=self.FRANCHISE_CREDENTIAL_ID
         )

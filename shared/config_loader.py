@@ -68,6 +68,7 @@ def load_config(
         "baud_rate": defaults.get("baud_rate", 9600),
         "franchise_credential_id": defaults.get("franchise_credential_id", ""),
         "webhook_url": defaults.get("webhook_url", ""),
+        "pkl_machine_id": defaults.get("pkl_machine_id", ""),
     }
 
     status_msg = ""
