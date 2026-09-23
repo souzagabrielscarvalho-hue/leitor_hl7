@@ -395,12 +395,19 @@ class BaseAnalisador:
         self.BAUD_RATE = _config["baud_rate"]
         self.FRANCHISE_CREDENTIAL_ID = _config.get("franchise_credential_id", "")
         self.PKL_MACHINE_ID = _config.get("pkl_machine_id", "")
-        # Log se pkl_machine_id estiver configurado
-        if self.PKL_MACHINE_ID:
-            logging.info(f"PKL Machine ID configurado: {self.PKL_MACHINE_ID}")
-        self.WEBHOOK_URL = _config["webhook_url"].format(
-            franchise_credential_id=self.FRANCHISE_CREDENTIAL_ID
-        )
+        self._config_status = _config_status
+
+        # Webhook URL com tratamento robusto para evitar erros
+        raw_webhook = _config.get("webhook_url", "")
+        if raw_webhook:
+            try:
+                self.WEBHOOK_URL = raw_webhook.format(
+                    franchise_credential_id=self.FRANCHISE_CREDENTIAL_ID
+                )
+            except (KeyError, IndexError, ValueError):
+                self.WEBHOOK_URL = raw_webhook
+        else:
+            self.WEBHOOK_URL = ""
         self._config_status = _config_status
 
     def _setup_dirs(self) -> None:
@@ -441,6 +448,7 @@ class BaseAnalisador:
             level=logging.INFO,
             format="%(asctime)s [%(levelname)s] %(message)s",
             handlers=handlers,
+            force=True,
         )
         logging.info(self._config_status)
 

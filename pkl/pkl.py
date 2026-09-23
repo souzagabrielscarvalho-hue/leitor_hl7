@@ -628,5 +628,7 @@ if __name__ == "__main__":
             ),
         },
         health_port=8083,
+        console_logging=True,
+        redirect_stdout=False,
         use_serial_listener=True,
     ).start()
