@@ -129,7 +129,7 @@ def parse_astm_record(fields: List[str], record_type: str) -> dict:
             record["action_code"] = fields[11] if len(fields) > 11 else ""
             record["sample_type"] = fields[15] if len(fields) > 15 else ""
         elif record_type == "Q":
-            specimen_raw = fields[3] if len(fields) > 3 else ""
+            specimen_raw = fields[2] if len(fields) > 2 else ""
             record["specimen_id"] = specimen_raw.lstrip('^') if specimen_raw else ""
             record["query_type"] = fields[4] if len(fields) > 4 else ""
             record["action_code"] = fields[12] if len(fields) > 12 else ""
@@ -398,13 +398,25 @@ def respond_to_query(ser: serial.Serial, specimen_id: str, franchise_id: str, pk
         resp = requests.get(url, timeout=10)
         if resp.status_code != 200:
             logging.warning(f"[BIDIREC] API de ordens retornou {resp.status_code}")
+            # Quando erro, envia EOT para finalizar sessão (igual C# legado)
+            try:
+                ser.write(EOT.encode("ascii"))
+                logging.info("[ASTM→EQP] EOT enviado (erro API)")
+            except Exception as e:
+                logging.error(f"[ASTM→EQP] Erro ao enviar EOT: {e}")
             return
 
         data = resp.json()
         codes = data.get("data", [])
 
         if not codes:
-            logging.info(f"[BIDIREC] Nenhuma ordem pendente para {specimen_id}")
+            logging.info(f"[BIDIREC] Nenhuma ordem pendente para {specimen_id} — enviando EOT")
+            # Quando não encontra, envia EOT para finalizar sessão (igual C# legado)
+            try:
+                ser.write(EOT.encode("ascii"))
+                logging.info("[ASTM→EQP] EOT enviado (nenhuma ordem)")
+            except Exception as e:
+                logging.error(f"[ASTM→EQP] Erro ao enviar EOT: {e}")
             return
 
         # Extrai patient do primeiro item (todos têm os mesmos dados)
