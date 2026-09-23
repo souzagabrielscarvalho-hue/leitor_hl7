@@ -99,9 +99,48 @@ Write-Host "  Compilacao concluida!" -ForegroundColor Green
 Write-Host ""
 
 # -------------------------------------------------------------------------
+# Build extra: test_get_only.exe (mesmo diretorio pkl, destino build/pkl/)
+# -------------------------------------------------------------------------
+Write-Host "  -> Compilando test_get_only..." -ForegroundColor White -NoNewline
+
+$specPathTgo = Join-Path $ProjectRoot "pkl\test_get_only.spec"
+$destDirTgo  = Join-Path $ProjectRoot "build\pkl"
+
+if (-not (Test-Path $specPathTgo)) {
+    Write-Host " SPEC NAO ENCONTRADO ($specPathTgo)" -ForegroundColor Red
+} else {
+    Push-Location (Join-Path $ProjectRoot "pkl")
+    $ErrorActionPreference = "Continue"
+    pyinstaller --noconfirm --clean $specPathTgo 2>&1 | Out-Null
+    $buildResultTgo = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    Pop-Location
+
+    if ($buildResultTgo -ne 0) {
+        Write-Host " ERRO (exit code: $buildResultTgo)" -ForegroundColor Red
+    } else {
+        $exeSourceTgo = Join-Path $ProjectRoot "pkl\dist\test_get_only.exe"
+        if (-not (Test-Path $exeSourceTgo)) {
+            $exeSourceTgo = Join-Path $ProjectRoot "dist\test_get_only.exe"
+        }
+
+        if (-not (Test-Path $exeSourceTgo)) {
+            Write-Host " EXE NAO ENCONTRADO apos build" -ForegroundColor Red
+        } else {
+            if (-not (Test-Path $destDirTgo)) {
+                New-Item -ItemType Directory -Path $destDirTgo -Force | Out-Null
+            }
+            Copy-Item -Path $exeSourceTgo -Destination $destDirTgo -Force
+            Write-Host " OK" -ForegroundColor Green
+        }
+    }
+}
+
+Write-Host ""
+
+# -------------------------------------------------------------------------
 # Etapa 2: Limpar artefatos temporarios do PyInstaller
 # -------------------------------------------------------------------------
-Write-Host "[2/3] Limpando artefatos temporarios..." -ForegroundColor Yellow
 
 # Remover pastas dist/ e arquivos temporarios em cada diretorio de spec
 foreach ($m in $maquinas) {
