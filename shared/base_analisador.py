@@ -48,9 +48,15 @@ CHECK_FILES_INTERVAL = 5
 MAX_RETRY = 5
 RETRY_INTERVAL = 60
 MAX_ERROS_CONSECUTIVOS = 10
-MAX_TENTATIVAS_PORTA = 5
-RECONNECT_INTERVAL = 10  # Segundos entre tentativas de reconexão da porta serial
+RECONNECT_INTERVAL = 10  # Segundos entre tentativas de reconexão da porta serial (runtime)
 DEFAULT_HEALTH_PORT = 8080
+
+# Tentativas de conexão serial no startup: 2 por minuto (a cada 30s)
+STARTUP_RETRY_INTERVAL = 30
+# Tempo máximo (segundos) sem a porta aberta antes de encerrar o processo (5 min)
+CONNECTION_DEADLINE = 300
+# Intervalo de checagem do watchdog de conexão
+WATCHDOG_POLL_INTERVAL = 5
 
 # Constantes para tratamento de erros ClearCommError na porta serial
 MAX_COMM_ERRORS = 5          # Quantos erros ClearCommError antes de forçar reabertura
@@ -173,6 +179,8 @@ class SerialListener:
         on_message: Callable[[str], None],
         enable_keepalive: bool = False,
         keepalive_interval: int = 90,
+        retry_interval_startup: int = STARTUP_RETRY_INTERVAL,
+        retry_interval_runtime: int = RECONNECT_INTERVAL,
     ) -> None:
         self.port_name = port_name
         self.baud_rate = baud_rate
@@ -180,12 +188,15 @@ class SerialListener:
         self._on_message = on_message
         self._enable_keepalive = enable_keepalive
         self._keepalive_interval = keepalive_interval
+        self._retry_interval_startup = retry_interval_startup
+        self._retry_interval_runtime = retry_interval_runtime
 
         self._serial_port: Optional[serial.Serial] = None
         self._thread: Optional[Thread] = None
         self._running = False
         self._lock = threading.Lock()
         self._buffer = ""
+        self._ever_connected = False
 
         # Métricas
         self.bytes_recebidos = 0
@@ -196,6 +207,12 @@ class SerialListener:
     def is_port_open(self) -> bool:
         return self._serial_port is not None and self._serial_port.is_open
 
+    def _current_retry_interval(self) -> int:
+        """30s enquanto nunca conectou (startup); 10s após a primeira conexão."""
+        if self._ever_connected:
+            return self._retry_interval_runtime
+        return self._retry_interval_startup
+
     def open_port(self) -> bool:
         if self.is_port_open:
             return True
@@ -203,6 +220,7 @@ class SerialListener:
             self._serial_port = serial.Serial(self.port_name, self.baud_rate, timeout=0.1)
             logging.info(f"✓ Conectado à porta {self.port_name} com sucesso.")
             self.last_activity = time.time()
+            self._ever_connected = True
             return True
         except serial.SerialException as e:
             logging.error(f"✗ Falha ao abrir porta serial {self.port_name}: {e}")
@@ -231,10 +249,18 @@ class SerialListener:
 
         while self._running:
             if not self.is_port_open:
-                self.open_port()
-                last_activity = time.time()
-                comm_error_count = 0
-                time.sleep(2)
+                connected = self.open_port()
+                if connected:
+                    last_activity = time.time()
+                    comm_error_count = 0
+                    continue
+                # Falhou: aguarda conforme o estágio (30s startup / 10s runtime)
+                retry_interval = self._current_retry_interval()
+                logging.error(
+                    f"✗ Tentativa de reconexão falhou para {self.port_name}. "
+                    f"Próxima tentativa em {retry_interval}s..."
+                )
+                time.sleep(retry_interval)
                 continue
 
             try:
@@ -386,6 +412,9 @@ class BaseAnalisador:
 
         # Serial listener (opcional)
         self._listener: Optional[SerialListener] = None
+
+        # Controle de conexão serial (deadline de 5 min sem porta aberta)
+        self._last_open_time = time.time()
 
     # ── SETUP ──────────────────────────────────────────────────
 
@@ -718,12 +747,52 @@ class BaseAnalisador:
 
     # ── SERIAL ─────────────────────────────────────────────────
 
-    def _open_serial_direct(self) -> serial.Serial:
-        """
-        Abre porta serial diretamente (modo simples), reconectando infinitamente.
+    def _serial_is_open(self) -> bool:
+        """Retorna True se a porta serial estiver aberta (qualquer modo)."""
+        if self._use_serial_listener:
+            return self._listener is not None and self._listener.is_port_open
+        ser = getattr(self, "_serial", None)
+        return ser is not None and ser.is_open
 
-        Nunca desiste: se a porta não abrir (cabo desconectado, driver, suspensão
-        do Windows), tenta novamente após RECONNECT_INTERVAL segundos.
+    def _die_no_connection(self) -> None:
+        """Encerra o processo após o deadline sem a porta aberta."""
+        logging.critical(
+            f"✗ {self.machine_name}: porta {self.COM_PORT} não abriu em "
+            f"{CONNECTION_DEADLINE // 60} minutos ({CONNECTION_DEADLINE}s). "
+            f"Encerrando o programa."
+        )
+        logging.shutdown()
+        os._exit(1)
+
+    def _start_connection_watchdog(self) -> None:
+        """
+        Monitora o tempo sem porta aberta e encerra o processo se ultrapassar
+        CONNECTION_DEADLINE. Vale para startup e runtime.
+        """
+        def _watchdog() -> None:
+            while True:
+                try:
+                    if self._serial_is_open():
+                        self._last_open_time = time.time()
+                    elif (time.time() - self._last_open_time) > CONNECTION_DEADLINE:
+                        self._die_no_connection()
+                except Exception as ex:
+                    logging.error(f"Erro no watchdog de conexão: {ex}")
+                time.sleep(WATCHDOG_POLL_INTERVAL)
+
+        Thread(
+            target=_watchdog, daemon=True, name="connection-watchdog"
+        ).start()
+
+    def _open_serial_direct(self, retry_interval: int = RECONNECT_INTERVAL) -> serial.Serial:
+        """
+        Abre porta serial diretamente (modo simples).
+
+        Fica tentando abrir a porta indefinidamente a cada `retry_interval`
+        segundos (startup usa STARTUP_RETRY_INTERVAL = 30s; runtime usa
+        RECONNECT_INTERVAL = 10s). O encerramento por deadline é responsabilidade
+        do watchdog (_start_connection_watchdog), que encerra o processo se a
+        porta ficar CONNECTION_DEADLINE segundos sem abrir.
         """
         tentativas = 0
         while True:
@@ -736,17 +805,17 @@ class BaseAnalisador:
                 logging.error(
                     f"✗ Tentativa {tentativas}: Falha ao abrir porta serial "
                     f"{self.COM_PORT}: {e}. Tentando novamente em "
-                    f"{RECONNECT_INTERVAL}s..."
+                    f"{retry_interval}s..."
                 )
-                time.sleep(RECONNECT_INTERVAL)
+                time.sleep(retry_interval)
             except Exception as e:
                 tentativas += 1
                 logging.critical(
                     f"✗ Erro inesperado ao abrir porta serial: "
                     f"{type(e).__name__}: {e}. Tentando novamente em "
-                    f"{RECONNECT_INTERVAL}s..."
+                    f"{retry_interval}s..."
                 )
-                time.sleep(RECONNECT_INTERVAL)
+                time.sleep(retry_interval)
 
     def _close_serial_handle(self, ser: Optional[serial.Serial]) -> None:
         """Fecha o handle serial com segurança, ignorando erros."""
@@ -764,7 +833,9 @@ class BaseAnalisador:
         Chama detect_complete_message() e on_message() como hooks.
 
         Em caso de queda da conexão (USB desconectado, driver, suspensão do
-        Windows), fecha o handle, descarta o objeto e reconecta infinitamente.
+        Windows), fecha o handle, descarta o objeto e reconecta a cada
+        RECONNECT_INTERVAL segundos (10s). O watchdog encerra o processo se a
+        porta ficar CONNECTION_DEADLINE segundos sem abrir.
         """
         buffer = ""
         bytes_recebidos = 0
@@ -847,6 +918,9 @@ class BaseAnalisador:
 
     def _start_with_serial_listener(self) -> None:
         """Inicia usando SerialListener (MEK7300, PKL)."""
+        # Watchdog de conexão (encerra após CONNECTION_DEADLINE sem porta aberta)
+        self._start_connection_watchdog()
+
         self._listener = SerialListener(
             port_name=self.COM_PORT,
             baud_rate=self.BAUD_RATE,
@@ -863,12 +937,11 @@ class BaseAnalisador:
 
         self._listener.start_listening()
 
-        # Timer para verificar status da porta
+        # Timer para atualizar métricas de health (a reconexão é feita pelo
+        # _read_loop do SerialListener, que respeita o intervalo de retry).
         def check_port_timer() -> None:
             while True:
                 try:
-                    if self._listener and not self._listener.is_port_open:
-                        self._listener.open_port()
                     if self._health and self._listener:
                         self._health.update_stats(
                             port_open=self._listener.is_port_open,
@@ -900,8 +973,12 @@ class BaseAnalisador:
 
     def _start_with_serial_direct(self) -> None:
         """Inicia com loop serial inline (BH5100, Coagmaster, VIDAS1600)."""
-        # _open_serial_direct reconecta infinitamente; nunca retorna None.
-        ser = self._open_serial_direct()
+        # Watchdog de conexão (encerra após CONNECTION_DEADLINE sem porta aberta)
+        self._start_connection_watchdog()
+
+        # Abre a porta com retry a cada 30s (2 tentativas/min) no startup;
+        # o watchdog encerra o processo se o deadline for atingido.
+        ser = self._open_serial_direct(retry_interval=STARTUP_RETRY_INTERVAL)
 
         # Armazena referência para _send_ack
         self._serial = ser
