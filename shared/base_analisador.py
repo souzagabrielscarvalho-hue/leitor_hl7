@@ -127,24 +127,44 @@ def extrair_imagens_de_hl7(conteudo_hl7: str, pasta_destino: str, prefixo: str =
         if not obx5:
             continue
 
-        subfields = obx5.split('^')
-        if len(subfields) < 4:
-            continue
+        # O campo OBX-5 de imagens tem o formato:
+        #   <origem>^Image^<formato>^Base64^<dados_base64>
+        # Nem todo equipamento inclui o marcador "Base64" literalmente, então
+        # tentamos primeiro o marcador (modo robusto, igual ao parser de
+        # referência em makeimage.py) e caímos para subfields[4] (dados após o
+        # campo de encoding) quando ele não existe.
+        if 'Base64^' in obx5:
+            _, _, dados_e_formato = obx5.partition('Base64^')
+            b64_data = dados_e_formato
+            mime_raw = obx5.split('^')[2] if len(obx5.split('^')) > 2 else ""
+        else:
+            subfields = obx5.split('^')
+            if len(subfields) < 5:
+                continue
+            b64_data = subfields[4]
+            mime_raw = subfields[2]
 
-        b64_data = subfields[3]
+        b64_data = b64_data.strip()
         if not b64_data:
             continue
 
+        # Base64 pode vir sem padding explícito ("Incorrect padding")
+        padded = b64_data + "=" * (-len(b64_data) % 4)
         try:
-            img_bytes = base64.b64decode(b64_data)
+            img_bytes = base64.b64decode(padded)
         except Exception as e:
             logging.warning(f"Erro ao decodificar Base64: {e}")
             continue
 
+        # Extensão a partir do formato/mime (ex.: "BMP", "image/jpeg")
         ext = ".png"
-        if len(subfields) > 2 and subfields[2]:
-            ext_map = {"image/jpeg": ".jpg", "image/png": ".png", "image/bmp": ".bmp"}
-            ext = ext_map.get(subfields[2].lower(), ".png")
+        if mime_raw:
+            ext_map = {
+                "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png",
+                "image/bmp": ".bmp", "jpeg": ".jpg", "jpg": ".jpg",
+                "png": ".png", "bmp": ".bmp",
+            }
+            ext = ext_map.get(mime_raw.strip().lower(), ".png")
 
         nome_arquivo = f"{prefixo}obx_{qtd_imagens + 1}{ext}"
         caminho_completo = os.path.join(pasta_destino, nome_arquivo)
