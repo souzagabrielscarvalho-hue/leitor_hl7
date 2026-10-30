@@ -53,7 +53,8 @@ DEFAULT_HEALTH_PORT = 8080
 
 # Tentativas de conexão serial no startup: 2 por minuto (a cada 30s)
 STARTUP_RETRY_INTERVAL = 30
-# Tempo máximo (segundos) sem a porta aberta antes de encerrar o processo (5 min)
+# Tempo máximo (segundos) sem a porta aberta E sem exames pendentes em gerados
+# antes de encerrar o processo (5 min).
 CONNECTION_DEADLINE = 300
 # Intervalo de checagem do watchdog de conexão
 WATCHDOG_POLL_INTERVAL = 5
@@ -100,18 +101,23 @@ def format_thousands(value_str: str) -> str:
     return formatted + suffix
 
 
-def extrair_imagens_de_hl7(conteudo_hl7: str, pasta_destino: str, prefixo: str = "") -> int:
+def extrair_imagens_de_hl7_com_metadados(
+    conteudo_hl7: str,
+    pasta_destino: str,
+    prefixo: str = "",
+) -> List[Dict[str, str]]:
     """
     Extrai imagens Base64 de segmentos OBX com tipo ED (Encapsulated Data)
-    de uma mensagem HL7. Retorna o número de imagens extraídas.
+    e devolve, para cada imagem, o caminho salvo e o nome do OBX-3 (ex.:
+    HISTO^RBCHistogram), usado para descobrir o código WBC/RBC/PLT.
 
     Comum a BH5100 e VIDAS1600.
     """
     if not conteudo_hl7 or not pasta_destino:
-        return 0
+        return []
 
     os.makedirs(pasta_destino, exist_ok=True)
-    qtd_imagens = 0
+    imagens: List[Dict[str, str]] = []
 
     clean = conteudo_hl7.replace('\r\n', '\n').replace('\r', '\n')
     segments = clean.split('\n')
@@ -166,17 +172,27 @@ def extrair_imagens_de_hl7(conteudo_hl7: str, pasta_destino: str, prefixo: str =
             }
             ext = ext_map.get(mime_raw.strip().lower(), ".png")
 
-        nome_arquivo = f"{prefixo}obx_{qtd_imagens + 1}{ext}"
+        nome_arquivo = f"{prefixo}obx_{len(imagens) + 1}{ext}"
         caminho_completo = os.path.join(pasta_destino, nome_arquivo)
 
         try:
             with open(caminho_completo, 'wb') as f:
                 f.write(img_bytes)
-            qtd_imagens += 1
+            imagens.append({
+                "arquivo": caminho_completo,
+                "nome": fields[3] if len(fields) > 3 else "",
+                "mime_type": mime_raw,
+                "extensao": ext,
+            })
         except OSError as e:
             logging.warning(f"Erro ao salvar imagem {nome_arquivo}: {e}")
 
-    return qtd_imagens
+    return imagens
+
+
+def extrair_imagens_de_hl7(conteudo_hl7: str, pasta_destino: str, prefixo: str = "") -> int:
+    """Compatibilidade: extrai as imagens e devolve apenas a quantidade."""
+    return len(extrair_imagens_de_hl7_com_metadados(conteudo_hl7, pasta_destino, prefixo))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -444,6 +460,8 @@ class BaseAnalisador:
         self.BAUD_RATE = _config["baud_rate"]
         self.FRANCHISE_CREDENTIAL_ID = _config.get("franchise_credential_id", "")
         self.PKL_MACHINE_ID = _config.get("pkl_machine_id", "")
+        self.EXAM_IMAGES_URL = _config.get("exam_images_url", "")
+        self.EXAM_IMAGES_MACHINE_TOKEN = _config.get("exam_images_machine_token", "")
         self._config_status = _config_status
 
         # Webhook URL com tratamento robusto para evitar erros
@@ -457,6 +475,14 @@ class BaseAnalisador:
                 self.WEBHOOK_URL = raw_webhook
         else:
             self.WEBHOOK_URL = ""
+
+        # Se a URL de imagens não foi configurada, usa o mesmo host do webhook:
+        # https://.../api/integration/bh5100 -> https://.../api/integration/images
+        if not self.EXAM_IMAGES_URL and '/integration/' in self.WEBHOOK_URL:
+            self.EXAM_IMAGES_URL = (
+                self.WEBHOOK_URL.split('/integration/')[0] + '/integration/images'
+            )
+
         self._config_status = _config_status
 
     def _setup_dirs(self) -> None:
@@ -530,6 +556,9 @@ class BaseAnalisador:
         logging.info(f"Webhook: {self.WEBHOOK_URL}")
         if self.FRANCHISE_CREDENTIAL_ID:
             logging.info(f"Franchise Credential ID: {self.FRANCHISE_CREDENTIAL_ID}")
+        if self.EXAM_IMAGES_URL:
+            token_status = "configurado" if self.EXAM_IMAGES_MACHINE_TOKEN else "vazio (envio desligado)"
+            logging.info(f"Imagens de exame: {self.EXAM_IMAGES_URL} | token: {token_status}")
         logging.info(
             f"Pastas: gerados={self.GERADOS_DIR} | enviados={self.ENVIADOS_DIR} | "
             f"não enviados={self.REQUISICOES_NAO_ENVIADAS_DIR} | logs={self.LOGS_DIR}"
@@ -599,12 +628,14 @@ class BaseAnalisador:
                         time.sleep(RETRY_INTERVAL)
 
                 elif resp.status_code == 400:
+                    # 400 é rejeição de negócio (etiqueta/exame inexistente,
+                    # procedimento já liberado, payload inválido): repetir não
+                    # resolve e só atrasa o próximo exame.
                     logging.error(
                         f"✗ [{tentativa}/{MAX_RETRY}] {nome_arquivo}: "
                         f"Erro 400 (Bad Request). Resposta: {resp.text[:300]}"
                     )
-                    if tentativa < MAX_RETRY:
-                        time.sleep(RETRY_INTERVAL)
+                    return False
 
                 elif resp.status_code in (401, 403):
                     logging.critical(
@@ -774,25 +805,83 @@ class BaseAnalisador:
         ser = getattr(self, "_serial", None)
         return ser is not None and ser.is_open
 
+    def _count_pending_files(self) -> int:
+        """Quantos arquivos da máquina ainda estão em gerados."""
+        try:
+            extensao = self.get_file_extension()
+            return sum(
+                1 for nome in os.listdir(self.GERADOS_DIR)
+                if nome.endswith(extensao)
+            )
+        except OSError:
+            return 0
+
+    def _has_pending_files(self) -> bool:
+        return self._count_pending_files() > 0
+
+    def _show_popup(self, titulo: str, mensagem: str) -> None:
+        """Aviso visual no Windows; em outros sistemas fica só no log."""
+        try:
+            if sys.platform.startswith("win"):
+                import ctypes
+
+                MB_OK = 0x0
+                MB_ICONERROR = 0x10
+                MB_TOPMOST = 0x40000
+
+                ctypes.windll.user32.MessageBoxW(
+                    0,
+                    mensagem,
+                    titulo,
+                    MB_OK | MB_ICONERROR | MB_TOPMOST,
+                )
+            else:
+                logging.warning(f"{titulo}: {mensagem}")
+        except Exception as ex:
+            logging.error(f"Não foi possível exibir o popup: {ex}")
+
     def _die_no_connection(self) -> None:
-        """Encerra o processo após o deadline sem a porta aberta."""
+        """
+        Encerra o processo quando a COM está caída e gerados está vazio.
+
+        Enquanto houver exame em gerados, o watchdog NÃO encerra: o envio de
+        resultados e imagens continua mesmo com a serial desconectada.
+        """
         logging.critical(
-            f"✗ {self.machine_name}: porta {self.COM_PORT} não abriu em "
-            f"{CONNECTION_DEADLINE // 60} minutos ({CONNECTION_DEADLINE}s). "
-            f"Encerrando o programa."
+            f"✗ {self.machine_name}: porta {self.COM_PORT} sem conexão há "
+            f"{CONNECTION_DEADLINE // 60} minutos e nenhum exame pendente em "
+            f"{self.GERADOS_DIR}. Encerrando o programa."
         )
+
+        self._show_popup(
+            f"Interfaceamento {self.machine_name} parou",
+            (
+                f"O interfaceamento do {self.machine_name} parou.\n\n"
+                f"A porta {self.COM_PORT} está sem conexão há "
+                f"{CONNECTION_DEADLINE // 60} minutos e não há exames "
+                f"pendentes na pasta gerados.\n\n"
+                f"Verifique o cabo/porta e reabra o programa."
+            ),
+        )
+
         logging.shutdown()
         os._exit(1)
 
     def _start_connection_watchdog(self) -> None:
         """
-        Monitora o tempo sem porta aberta e encerra o processo se ultrapassar
-        CONNECTION_DEADLINE. Vale para startup e runtime.
+        Monitora a porta serial. Se ela cair, o processo continua vivo
+        enquanto houver .hl7 em gerados: resultados e imagens pendentes
+        continuam sendo enviados. Só encerra quando a porta está caída há
+        CONNECTION_DEADLINE e não há mais nada para enviar.
         """
         def _watchdog() -> None:
             while True:
                 try:
                     if self._serial_is_open():
+                        self._last_open_time = time.time()
+                    elif self._has_pending_files():
+                        # Ainda há exame para enviar: mantém o processo vivo.
+                        # O prazo só começa a contar quando gerados esvaziar.
                         self._last_open_time = time.time()
                     elif (time.time() - self._last_open_time) > CONNECTION_DEADLINE:
                         self._die_no_connection()

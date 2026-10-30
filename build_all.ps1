@@ -28,6 +28,16 @@ Write-Host "  Build All - Leitor HL7" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
 
+# O BH5100 converte os BMP do HL7 para PNG antes de enviar ao S3; sem Pillow
+# o exe compila, mas as imagens sao ignoradas em runtime.
+$pythonExe = if (Test-Path $venvPython) { $venvPython } else { "python" }
+& $pythonExe -c "import PIL" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  AVISO: Pillow nao instalado. Rode: $pythonExe -m pip install pillow" -ForegroundColor Yellow
+    Write-Host "         Sem ele o BH5100 envia o hemograma, mas nao as imagens." -ForegroundColor Yellow
+    Write-Host ""
+}
+
 # -------------------------------------------------------------------------
 # Definir as máquinas (nome da pasta = nome do spec = nome do exe)
 # -------------------------------------------------------------------------
@@ -96,6 +106,50 @@ foreach ($m in $maquinas) {
 
 Write-Host ""
 Write-Host "  Compilacao concluida!" -ForegroundColor Green
+Write-Host ""
+
+# -------------------------------------------------------------------------
+# Build do envio_com (ferramenta de teste do BH5100, pasta irma ..\read)
+# -------------------------------------------------------------------------
+$envioDir  = Join-Path (Split-Path -Parent $ProjectRoot) "read"
+$envioSpec = Join-Path $envioDir "envio_com.spec"
+$envioDest = Join-Path $ProjectRoot "build\bh5100"
+
+if (Test-Path $envioSpec) {
+    Write-Host "  -> Compilando envio_com..." -ForegroundColor White -NoNewline
+
+    Push-Location $envioDir
+    $ErrorActionPreference = "Continue"
+    pyinstaller --noconfirm --clean $envioSpec 2>&1 | Out-Null
+    $buildResultEnvio = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    Pop-Location
+
+    $envioExe = Join-Path $envioDir "dist\envio_com.exe"
+
+    if ($buildResultEnvio -ne 0) {
+        Write-Host " ERRO (exit code: $buildResultEnvio)" -ForegroundColor Red
+    } elseif (-not (Test-Path $envioExe)) {
+        Write-Host " EXE NAO ENCONTRADO apos build" -ForegroundColor Red
+    } else {
+        if (-not (Test-Path $envioDest)) {
+            New-Item -ItemType Directory -Path $envioDest -Force | Out-Null
+        }
+        Copy-Item -Path $envioExe -Destination $envioDest -Force
+
+        # Nao sobrescreve a configuracao ja ajustada no PC.
+        $envioConfigSrc = Join-Path $envioDir "config_envio_com.json"
+        $envioConfigDst = Join-Path $envioDest "config_envio_com.json"
+        if ((Test-Path $envioConfigSrc) -and -not (Test-Path $envioConfigDst)) {
+            Copy-Item -Path $envioConfigSrc -Destination $envioConfigDst -Force
+        }
+
+        Write-Host " OK" -ForegroundColor Green
+    }
+} else {
+    Write-Host "  AVISO: $envioSpec nao encontrado; envio_com nao foi compilado." -ForegroundColor Yellow
+}
+
 Write-Host ""
 
 # -------------------------------------------------------------------------

@@ -69,6 +69,8 @@ def load_config(
         "franchise_credential_id": defaults.get("franchise_credential_id", ""),
         "webhook_url": defaults.get("webhook_url", ""),
         "pkl_machine_id": defaults.get("pkl_machine_id", ""),
+        "exam_images_url": defaults.get("exam_images_url", ""),
+        "exam_images_machine_token": defaults.get("exam_images_machine_token", ""),
     }
 
     status_msg = ""
@@ -83,7 +85,26 @@ def load_config(
                 if key in file_config:
                     config[key] = file_config[key]
 
-            status_msg = f"[Config] Arquivo de configuracao carregado: {config_path}"
+            # Versões novas podem acrescentar chaves (ex.: envio de imagens).
+            # Grava as que faltavam mantendo as chaves desconhecidas do arquivo.
+            faltantes = {key: value for key, value in config.items() if key not in file_config}
+
+            if faltantes:
+                file_config.update(faltantes)
+                try:
+                    with open(config_path, 'w', encoding='utf-8') as f:
+                        json.dump(file_config, f, indent=4, ensure_ascii=False)
+                    status_msg = (
+                        f"[Config] Arquivo de configuracao carregado: {config_path} "
+                        f"(chaves novas: {', '.join(faltantes)})"
+                    )
+                except IOError as e:
+                    status_msg = (
+                        f"[Config] Arquivo de configuracao carregado: {config_path} "
+                        f"(nao foi possivel gravar chaves novas: {e})"
+                    )
+            else:
+                status_msg = f"[Config] Arquivo de configuracao carregado: {config_path}"
         except (json.JSONDecodeError, IOError) as e:
             status_msg = f"[Config] Erro ao ler {config_path}: {e}. Usando valores padrao."
     else:
