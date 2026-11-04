@@ -80,7 +80,8 @@ Thread daemon que roda em background com as seguintes políticas:
 
 O BH5100 extrai os histogramas/scattergrams do HL7 e, depois que o hemograma é aceito pelo webhook, envia as imagens direto ao S3 pelo fluxo do lab-apoio (`initiate` → `PUT` → `confirm`). O `.exe` não recebe credencial da AWS.
 
-No `config_bh5100.json`, ao lado do `.exe`:
+No `config_bh5100.json`, ao lado do `.exe` (modelo com placeholders em
+`build/bh5100/config_bh5100.example.json`):
 
 - `exam_images_url`: base das rotas; se ficar vazia, é derivada do `webhook_url` (`.../api/integration/images`)
 - `exam_images_machine_token`: o token do grupo **tipo + unidade**; vazio desliga o envio.
@@ -103,7 +104,7 @@ O comando recusa criar outro token ativo para o mesmo tipo + unidade. Se precisa
 
 Para rotacionar um token de grupo, atualize o `config_bh5100.json` de **todos** os PCs que usam aquele token. Se um PC for perdido, rotacione o token do grupo e atualize os demais; para revogar só um PC, use o modelo por PC (`--force`).
 
-O `EXAM_IMAGES_MACHINE_TOKEN` global do PDF continua aceito apenas enquanto `EXAM_IMAGES_ALLOW_LEGACY_TOKEN=true`; depois de migrar todos os PCs, defina `EXAM_IMAGES_ALLOW_LEGACY_TOKEN=false` e deixe o token global vazio.
+Não existe token global no `.env` do lab-apoio: o token é sempre o do grupo `tipo + unidade` (ou por PC com `--force`), configurado no `config_bh5100.json`.
 
 Para um tipo novo (`vidas1600`, `mek7300`, ...), acrescente o tipo em `config/exam_images.php` → `machines` e crie o token do grupo com `--machine=vidas1600` (ou `mek7300`). Hoje só o BH5100 tem o código de envio de imagens.
 
