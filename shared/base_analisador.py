@@ -58,6 +58,10 @@ STARTUP_RETRY_INTERVAL = 30
 CONNECTION_DEADLINE = 300
 # Intervalo de checagem do watchdog de conexão
 WATCHDOG_POLL_INTERVAL = 5
+# Porta caída e gerados sem diminuir por este tempo: encerra mesmo assim, para
+# um arquivo preso não impedir o aviso. O que sobrar é enviado ao reabrir.
+# Precisa ser maior que o pior caso de um envio (5 tentativas = 6,5 min).
+DRAIN_STALL_TIMEOUT = 900
 
 # Constantes para tratamento de erros ClearCommError na porta serial
 MAX_COMM_ERRORS = 5          # Quantos erros ClearCommError antes de forçar reabertura
@@ -217,6 +221,7 @@ class SerialListener:
         keepalive_interval: int = 90,
         retry_interval_startup: int = STARTUP_RETRY_INTERVAL,
         retry_interval_runtime: int = RECONNECT_INTERVAL,
+        on_serial_error: Optional[Callable[[BaseException, bool], None]] = None,
     ) -> None:
         self.port_name = port_name
         self.baud_rate = baud_rate
@@ -226,6 +231,8 @@ class SerialListener:
         self._keepalive_interval = keepalive_interval
         self._retry_interval_startup = retry_interval_startup
         self._retry_interval_runtime = retry_interval_runtime
+        # (erro, reconexao): reconexao=True quando a porta não abriu.
+        self._on_serial_error = on_serial_error
 
         self._serial_port: Optional[serial.Serial] = None
         self._thread: Optional[Thread] = None
@@ -249,6 +256,10 @@ class SerialListener:
             return self._retry_interval_runtime
         return self._retry_interval_startup
 
+    def _notify_serial_error(self, erro: BaseException, reconexao: bool) -> None:
+        if self._on_serial_error:
+            self._on_serial_error(erro, reconexao)
+
     def open_port(self) -> bool:
         if self.is_port_open:
             return True
@@ -260,9 +271,11 @@ class SerialListener:
             return True
         except serial.SerialException as e:
             logging.error(f"✗ Falha ao abrir porta serial {self.port_name}: {e}")
+            self._notify_serial_error(e, True)
             return False
         except Exception as e:
             logging.critical(f"✗ Erro inesperado ao abrir porta serial: {type(e).__name__}: {e}")
+            self._notify_serial_error(e, True)
             return False
 
     def start_listening(self) -> None:
@@ -355,6 +368,7 @@ class SerialListener:
                         f"✗ {MAX_COMM_ERRORS} erros ClearCommError consecutivos — "
                         f"forçando reabertura da porta."
                     )
+                    self._notify_serial_error(ex, False)
                     self._buffer = ""
                     try:
                         if self._serial_port and self._serial_port.is_open:
@@ -369,6 +383,7 @@ class SerialListener:
             except Exception as ex:
                 self._buffer = ""
                 logging.error(f"✗ Erro no read_loop: {ex}")
+                self._notify_serial_error(ex, False)
                 try:
                     if self._serial_port and self._serial_port.is_open:
                         self._serial_port.close()
@@ -451,6 +466,11 @@ class BaseAnalisador:
 
         # Controle de conexão serial (deadline de 5 min sem porta aberta)
         self._last_open_time = time.time()
+        self._encerrando = False
+        self._erro_queda: Optional[str] = None
+        self._erro_reconexao: Optional[str] = None
+        self._enviados_na_queda = 0
+        self._nao_enviados_na_queda = 0
 
     # ── SETUP ──────────────────────────────────────────────────
 
@@ -462,6 +482,8 @@ class BaseAnalisador:
         self.PKL_MACHINE_ID = _config.get("pkl_machine_id", "")
         self.EXAM_IMAGES_URL = _config.get("exam_images_url", "")
         self.EXAM_IMAGES_MACHINE_TOKEN = _config.get("exam_images_machine_token", "")
+        # Só quem declara o token nos defaults envia imagens (hoje, o BH5100).
+        self._envia_imagens = "exam_images_machine_token" in _config
         self._config_status = _config_status
 
         # Webhook URL com tratamento robusto para evitar erros
@@ -478,7 +500,7 @@ class BaseAnalisador:
 
         # Se a URL de imagens não foi configurada, usa o mesmo host do webhook:
         # https://.../api/integration/bh5100 -> https://.../api/integration/images
-        if not self.EXAM_IMAGES_URL and '/integration/' in self.WEBHOOK_URL:
+        if self._envia_imagens and not self.EXAM_IMAGES_URL and '/integration/' in self.WEBHOOK_URL:
             self.EXAM_IMAGES_URL = (
                 self.WEBHOOK_URL.split('/integration/')[0] + '/integration/images'
             )
@@ -531,8 +553,9 @@ class BaseAnalisador:
         self._cleanup_config = FileCleanupConfig()
         self._cleanup_config.log_file_path = self.LOG_FILE
         self._cleanup_config.base_dir = self.BASE_DIR
+        # gerados fica de fora: arquivá-la tiraria da fila exames ainda não
+        # enviados, que nunca mais seriam enviados.
         self._cleanup_config.daily_rotation_dirs = [
-            self.GERADOS_DIR,
             self.ENVIADOS_DIR,
             self.REQUISICOES_NAO_ENVIADAS_DIR,
         ]
@@ -556,7 +579,7 @@ class BaseAnalisador:
         logging.info(f"Webhook: {self.WEBHOOK_URL}")
         if self.FRANCHISE_CREDENTIAL_ID:
             logging.info(f"Franchise Credential ID: {self.FRANCHISE_CREDENTIAL_ID}")
-        if self.EXAM_IMAGES_URL:
+        if self._envia_imagens:
             token_status = "configurado" if self.EXAM_IMAGES_MACHINE_TOKEN else "vazio (envio desligado)"
             logging.info(f"Imagens de exame: {self.EXAM_IMAGES_URL} | token: {token_status}")
         logging.info(
@@ -572,7 +595,14 @@ class BaseAnalisador:
 
     def _start_health_server(self) -> None:
         if self._health:
-            self._health.start()
+            try:
+                self._health.start()
+            except OSError as e:
+                # Health check é só diagnóstico: porta ocupada não pode impedir
+                # a leitura da serial e o envio dos exames.
+                logging.error(
+                    f"Health check indisponível na porta {self._health_port}: {e}"
+                )
             self._update_health_stats()
 
     def _update_health_stats(self) -> None:
@@ -727,8 +757,15 @@ class BaseAnalisador:
                     except Exception as e:
                         logging.error(
                             f"✗ Erro ao processar {nome_arquivo}: "
-                            f"{type(e).__name__}: {e}"
+                            f"{type(e).__name__}: {e}. "
+                            f"Movido para '{self.REQUISICOES_NAO_ENVIADAS_DIR}'."
                         )
+                        # Tentar de novo daria o mesmo erro e prenderia a fila.
+                        try:
+                            shutil.move(caminho_origem, caminho_nao_enviado)
+                            self._contar_envio_na_queda(enviado=False)
+                        except OSError as move_error:
+                            logging.error(f"✗ Falha ao mover arquivo: {move_error}")
                         continue
 
                     if payloads is None:
@@ -756,6 +793,7 @@ class BaseAnalisador:
                     if all_sent:
                         try:
                             shutil.move(caminho_origem, caminho_destino)
+                            self._contar_envio_na_queda(enviado=True)
                         except OSError as e:
                             logging.error(f"✗ Falha ao mover arquivo {nome_arquivo}: {e}")
                     else:
@@ -766,6 +804,7 @@ class BaseAnalisador:
                         )
                         try:
                             shutil.move(caminho_origem, caminho_nao_enviado)
+                            self._contar_envio_na_queda(enviado=False)
                         except OSError as e:
                             logging.error(f"✗ Falha ao mover arquivo: {e}")
 
@@ -816,8 +855,50 @@ class BaseAnalisador:
         except OSError:
             return 0
 
-    def _has_pending_files(self) -> bool:
-        return self._count_pending_files() > 0
+    def _registrar_erro_serial(self, erro: BaseException, reconexao: bool = False) -> None:
+        """Guarda o erro para o popup: o da queda e o da última reconexão."""
+        texto = f"{type(erro).__name__}: {erro}"
+        if reconexao:
+            self._erro_reconexao = texto
+        else:
+            self._erro_queda = texto
+
+    def _contar_envio_na_queda(self, enviado: bool) -> None:
+        """Conta o resultado de um arquivo enviado enquanto a porta está caída."""
+        if self._serial_is_open():
+            return
+        if enviado:
+            self._enviados_na_queda += 1
+        else:
+            self._nao_enviados_na_queda += 1
+
+    def _limpar_estado_queda(self) -> None:
+        self._erro_queda = None
+        self._erro_reconexao = None
+        self._enviados_na_queda = 0
+        self._nao_enviados_na_queda = 0
+
+    def _mensagem_queda(self, pendentes: int) -> str:
+        """Texto do popup: o que caiu, qual o erro e como ficaram os exames."""
+        erro = self._erro_queda or self._erro_reconexao or "não informado pelo driver"
+        linhas = [
+            f"A conexão com o analisador {self.machine_name} foi perdida.",
+            "",
+            f"Porta: {self.COM_PORT}",
+            f"Erro: {erro}",
+        ]
+        if self._erro_queda and self._erro_reconexao:
+            linhas.append(f"Última tentativa de reconexão: {self._erro_reconexao}")
+        linhas += [
+            "",
+            "Exames da pasta gerados:",
+            f"- enviados durante a queda: {self._enviados_na_queda}",
+            f'- não enviados (pasta "requisições não enviadas"): {self._nao_enviados_na_queda}',
+            f"- ainda pendentes (serão enviados ao reabrir): {pendentes}",
+            "",
+            "O programa será encerrado. Verifique o cabo/porta e abra-o novamente.",
+        ]
+        return "\n".join(linhas)
 
     def _show_popup(self, titulo: str, mensagem: str) -> None:
         """Aviso visual no Windows; em outros sistemas fica só no log."""
@@ -827,67 +908,84 @@ class BaseAnalisador:
 
                 MB_OK = 0x0
                 MB_ICONERROR = 0x10
+                MB_SETFOREGROUND = 0x10000
                 MB_TOPMOST = 0x40000
 
                 ctypes.windll.user32.MessageBoxW(
                     0,
                     mensagem,
                     titulo,
-                    MB_OK | MB_ICONERROR | MB_TOPMOST,
+                    MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST,
                 )
             else:
                 logging.warning(f"{titulo}: {mensagem}")
         except Exception as ex:
             logging.error(f"Não foi possível exibir o popup: {ex}")
 
-    def _die_no_connection(self) -> None:
-        """
-        Encerra o processo quando a COM está caída e gerados está vazio.
+    def _die_no_connection(self, pendentes: int) -> None:
+        """Avisa a queda da conexão com o erro e encerra o processo."""
+        mensagem = self._mensagem_queda(pendentes)
+        logging.critical(f"✗ Encerrando o programa. {mensagem!r}")
 
-        Enquanto houver exame em gerados, o watchdog NÃO encerra: o envio de
-        resultados e imagens continua mesmo com a serial desconectada.
-        """
-        logging.critical(
-            f"✗ {self.machine_name}: porta {self.COM_PORT} sem conexão há "
-            f"{CONNECTION_DEADLINE // 60} minutos e nenhum exame pendente em "
-            f"{self.GERADOS_DIR}. Encerrando o programa."
-        )
+        # Solta a porta antes do popup: ele fica aberto até alguém clicar, e o
+        # usuário pode reabrir o programa antes disso.
+        self._encerrando = True
+        if self._listener:
+            self._listener.stop_listening()
+        self._close_serial_handle(getattr(self, "_serial", None))
 
-        self._show_popup(
-            f"Interfaceamento {self.machine_name} parou",
-            (
-                f"O interfaceamento do {self.machine_name} parou.\n\n"
-                f"A porta {self.COM_PORT} está sem conexão há "
-                f"{CONNECTION_DEADLINE // 60} minutos e não há exames "
-                f"pendentes na pasta gerados.\n\n"
-                f"Verifique o cabo/porta e reabra o programa."
-            ),
-        )
+        self._show_popup(f"Conexão perdida - {self.machine_name}", mensagem)
 
         logging.shutdown()
         os._exit(1)
 
     def _start_connection_watchdog(self) -> None:
         """
-        Monitora a porta serial. Se ela cair, o processo continua vivo
-        enquanto houver .hl7 em gerados: resultados e imagens pendentes
-        continuam sendo enviados. Só encerra quando a porta está caída há
-        CONNECTION_DEADLINE e não há mais nada para enviar.
+        Monitora a porta serial. Com a porta caída, a thread de envio segue
+        esvaziando gerados e a reconexão continua. Se a porta não voltar em
+        CONNECTION_DEADLINE, encerra assim que gerados esvaziar ou ficar
+        DRAIN_STALL_TIMEOUT sem diminuir.
         """
         def _watchdog() -> None:
+            queda_avisada = False
+            pendentes_anterior = None
+            ultimo_progresso = 0.0
+
             while True:
+                # Espera primeiro: no início a porta ainda está sendo aberta.
+                time.sleep(WATCHDOG_POLL_INTERVAL)
                 try:
+                    agora = time.time()
+
                     if self._serial_is_open():
-                        self._last_open_time = time.time()
-                    elif self._has_pending_files():
-                        # Ainda há exame para enviar: mantém o processo vivo.
-                        # O prazo só começa a contar quando gerados esvaziar.
-                        self._last_open_time = time.time()
-                    elif (time.time() - self._last_open_time) > CONNECTION_DEADLINE:
-                        self._die_no_connection()
+                        if queda_avisada:
+                            logging.info(f"✓ Conexão com {self.COM_PORT} restabelecida.")
+                        self._last_open_time = agora
+                        self._limpar_estado_queda()
+                        queda_avisada = False
+                        pendentes_anterior = None
+                        continue
+
+                    if not queda_avisada:
+                        logging.warning(
+                            f"⚠ Porta {self.COM_PORT} sem conexão. Tentando "
+                            f"reconectar por até {CONNECTION_DEADLINE // 60} min; "
+                            f"os exames de gerados continuam sendo enviados."
+                        )
+                        queda_avisada = True
+
+                    pendentes = self._count_pending_files()
+                    if pendentes != pendentes_anterior:
+                        pendentes_anterior = pendentes
+                        ultimo_progresso = agora
+
+                    if (agora - self._last_open_time) > CONNECTION_DEADLINE and (
+                        pendentes == 0
+                        or (agora - ultimo_progresso) > DRAIN_STALL_TIMEOUT
+                    ):
+                        self._die_no_connection(pendentes)
                 except Exception as ex:
                     logging.error(f"Erro no watchdog de conexão: {ex}")
-                time.sleep(WATCHDOG_POLL_INTERVAL)
 
         Thread(
             target=_watchdog, daemon=True, name="connection-watchdog"
@@ -905,12 +1003,17 @@ class BaseAnalisador:
         """
         tentativas = 0
         while True:
+            if self._encerrando:
+                # O popup de encerramento está aberto: não retoma a porta.
+                time.sleep(1)
+                continue
             try:
                 ser = serial.Serial(self.COM_PORT, self.BAUD_RATE, timeout=0.1)
                 logging.info(f"✓ Conectado à porta {self.COM_PORT} com sucesso.")
                 return ser
             except serial.SerialException as e:
                 tentativas += 1
+                self._registrar_erro_serial(e, reconexao=True)
                 logging.error(
                     f"✗ Tentativa {tentativas}: Falha ao abrir porta serial "
                     f"{self.COM_PORT}: {e}. Tentando novamente em "
@@ -919,6 +1022,7 @@ class BaseAnalisador:
                 time.sleep(retry_interval)
             except Exception as e:
                 tentativas += 1
+                self._registrar_erro_serial(e, reconexao=True)
                 logging.critical(
                     f"✗ Erro inesperado ao abrir porta serial: "
                     f"{type(e).__name__}: {e}. Tentando novamente em "
@@ -970,6 +1074,7 @@ class BaseAnalisador:
                     f"✗ Conexão serial perdida ({type(e).__name__}: {e}). "
                     f"Reconectando..."
                 )
+                self._registrar_erro_serial(e)
                 self._close_serial_handle(ser)
                 buffer = ""
                 ser = self._open_serial_direct()
@@ -1036,6 +1141,7 @@ class BaseAnalisador:
             detect_complete_message=self.detect_complete_message,
             on_message=self._on_serial_message,
             enable_keepalive=self._enable_keepalive,
+            on_serial_error=self._registrar_erro_serial,
         )
 
         if not self._listener.open_port():

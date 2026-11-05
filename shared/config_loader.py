@@ -18,6 +18,10 @@ import os
 import sys
 from typing import Any, Dict, Tuple
 
+# Só existem no config da máquina que as declara nos defaults: máquina sem
+# imagem não ganha chave de token, e só o PKL tem pkl_machine_id.
+CHAVES_OPCIONAIS = ("pkl_machine_id", "exam_images_url", "exam_images_machine_token")
+
 
 def _get_app_dir(analisador_nome: str) -> str:
     """
@@ -50,11 +54,13 @@ def load_config(
                   - franchise_credential_id (str, opcional)
                   - webhook_url (str, opcional — se não informado, é montado
                     a partir de franchise_credential_id + url_base)
+                  - CHAVES_OPCIONAIS: entram no config só se presentes aqui
 
     Returns:
         Tuple[dict, str]: (config_dict, status_message)
         - config_dict: dicionário com as chaves com_port, baud_rate,
-          franchise_credential_id, webhook_url, config_file_path
+          franchise_credential_id, webhook_url, config_file_path e as
+          CHAVES_OPCIONAIS declaradas nos defaults
         - status_message: string informativa sobre o que ocorreu (carregado,
           criado, erro, etc.) — pode ser usada para logging após basicConfig()
     """
@@ -68,10 +74,10 @@ def load_config(
         "baud_rate": defaults.get("baud_rate", 9600),
         "franchise_credential_id": defaults.get("franchise_credential_id", ""),
         "webhook_url": defaults.get("webhook_url", ""),
-        "pkl_machine_id": defaults.get("pkl_machine_id", ""),
-        "exam_images_url": defaults.get("exam_images_url", ""),
-        "exam_images_machine_token": defaults.get("exam_images_machine_token", ""),
     }
+    for chave in CHAVES_OPCIONAIS:
+        if chave in defaults:
+            config[chave] = defaults[chave]
 
     status_msg = ""
 

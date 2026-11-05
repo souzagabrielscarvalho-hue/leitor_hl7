@@ -1,9 +1,0 @@
-{
-    "com_port": "COM7",
-    "baud_rate": 9600,
-    "franchise_credential_id": "88cf9273-5044-47f4-b8f6-01160345a190",
-    "webhook_url": "http://192.168.176.17:8039/api/integration/bh5100?franchise_credential_id={franchise_credential_id}",
-    "exam_images_url": "http://192.168.176.17:8039/api/integration/images",
-    "exam_images_machine_token": "b61dbd39e70d8045d207aeb46014fe2b0cd7efbced6794d95a51250cb5a13d6f",
-    "pkl_machine_id": ""
-}

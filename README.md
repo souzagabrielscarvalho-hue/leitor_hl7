@@ -36,14 +36,22 @@ leitor_hl7/
 │   └── vidas1600.py           # Código principal
 ├── shared/                    # Módulos compartilhados entre analisadores
 │   ├── __init__.py
+│   ├── base_analisador.py     # Serial, envio ao webhook e queda da COM
 │   ├── config_loader.py      # Carregamento de config JSON externa
-│   └── file_cleanup.py        # Limpeza automática de arquivos
+│   ├── exam_images_uploader.py # Envio das imagens ao S3 (só BH5100)
+│   ├── file_cleanup.py        # Limpeza automática de arquivos
+│   └── health_server.py       # Health check HTTP
+├── tests/                     # Testes (unittest)
+├── build_all.ps1              # Compila todos os executáveis
+├── enviar.ps1                 # Envia a branch atual para um repositório
+├── requirements.txt
 ├── build/                     # Executáveis prontos e seus JSONs de configuração
 │   ├── bh5100/
 │   │   ├── bh5100.exe
-│   │   ├── config_bh5100.json
-│   │   ├── envio_com.exe
-│   │   └── config_envio_com.json
+│   │   ├── config_bh5100.json          # não versionado (tem o token)
+│   │   ├── config_bh5100.example.json
+│   │   ├── envio_com.exe               # não versionado
+│   │   └── config_envio_com.json       # não versionado
 │   ├── COAGMASTER/
 │   │   ├── coagmaster.exe
 │   │   └── config_coagmaster.json
@@ -70,6 +78,7 @@ Thread daemon que roda em background com as seguintes políticas:
 
 | Funcionalidade | Configuração Padrão |
 |---|---|
+| Arquivamento diário | Move `enviados/` e `requisições não enviadas/` para `logs/`; `gerados/` fica de fora, para não tirar exames da fila de envio |
 | Rotação de logs | Quando o log atinge **5 MB**, é renomeado com timestamp |
 | Retenção de rotações | Mantém as **5** rotações mais recentes |
 | Limpeza por idade | Remove arquivos com mais de **30 dias** em `enviados/` e `requisições não enviadas/` |
@@ -106,11 +115,13 @@ Para rotacionar um token de grupo, atualize o `config_bh5100.json` de **todos** 
 
 Não existe token global no `.env` do lab-apoio: o token é sempre o do grupo `tipo + unidade` (ou por PC com `--force`), configurado no `config_bh5100.json`.
 
-Para um tipo novo (`vidas1600`, `mek7300`, ...), acrescente o tipo em `config/exam_images.php` → `machines` e crie o token do grupo com `--machine=vidas1600` (ou `mek7300`). Hoje só o BH5100 tem o código de envio de imagens.
+**Coagmaster, MEK7300, PKL e VIDAS 1600 não enviam imagens e funcionam sem token:** o lab-apoio só exige o token nas rotas `/api/integration/images/*`, e os `config_*.json` dessas máquinas não têm as chaves `exam_images_*`.
+
+Para um tipo novo (`vidas1600`, `mek7300`, ...), acrescente o tipo em `config/exam_images.php` → `machines` e crie o token do grupo com `--machine=vidas1600` (ou `mek7300`). Hoje só o BH5100 tem o código de envio de imagens. A máquina passa a ter as chaves de imagem no config ao declarar `exam_images_url` e `exam_images_machine_token` nos seus `config_defaults`.
 
 Se o token estiver vazio, o hemograma continua sendo enviado normalmente e as imagens são ignoradas. A conversão BMP → PNG usa Pillow (`pip install pillow`).
 
-Se o `exam_images_url` apontar para o lab-apoio local (ex.: `http://192.168.176.17:8039/api/integration/images`), ajuste também `EXAM_IMAGES_PUBLIC_ENDPOINT=http://192.168.176.17:9005` no `.env` do lab-apoio e reinicie o container. Sem isso, a URL pré-assinada do MinIO sai como `127.0.0.1:9005` e o PC Windows não consegue fazer o PUT da imagem.
+Se o `exam_images_url` apontar para o lab-apoio local (ex.: `http://192.168.176.17:8039/api/integration/images`), verifique se o endpoint do S3/MinIO é alcançável pelo PC Windows. Em producao AWS, nao defina `EXAM_IMAGES_ENDPOINT` (usa o endpoint padrao da AWS).
 
 ## Envio de HL7 de teste (`envio_com`)
 
@@ -164,40 +175,48 @@ envio_com.exe --list-ports
 
 ## Queda da conexão COM
 
-O envio de resultados e imagens roda em uma thread separada da leitura serial. Se a COM cair, o programa **continua vivo** e termina de enviar o que estiver em `gerados/`.
+Vale para `bh5100`, `coagmaster`, `mek7300`, `pkl` e `vidas1600`. O envio de resultados e imagens roda em uma thread separada da leitura serial, então continua com a COM caída.
 
-O processo só encerra quando as duas condições acontecem juntas:
+1. Enquanto a porta está caída, o programa tenta reconectar e segue enviando o que estiver em `gerados/`. Se a porta voltar em até 5 minutos, nada muda para o usuário.
+2. Depois de 5 minutos sem conexão, ele encerra assim que `gerados/` esvaziar.
+3. Se `gerados/` ficar 15 minutos sem diminuir (por exemplo, servidor fora), ele encerra mesmo assim. O que sobrou continua em `gerados/` e é enviado na próxima abertura.
 
-1. a porta COM está sem conexão há 5 minutos;
-2. não há nenhum `.hl7` pendente em `gerados/`.
+Antes de encerrar, aparece um popup com a porta, o erro da queda, o erro da última reconexão e a contagem dos exames enviados, não enviados e ainda pendentes. O programa só fecha depois do clique em OK, mas já solta a porta antes do popup, para poder ser reaberto.
 
-Nesse caso, aparece um popup no Windows avisando que o interfaceamento parou e o programa é encerrado. Se houver exames pendentes, ele continua tentando enviar mesmo com a serial desconectada.
+Arquivos que falharam vão para `requisições não enviadas/` e não são reenviados automaticamente.
 
-## Build (PyInstaller)
+## Build
 
 ```powershell
-# BH5100
-cd bh5100
-pyinstaller bh5100.spec --noconfirm
-
-# Coagmaster
-cd Coagmaster
-pyinstaller coagmaster.spec --noconfirm
-
-# MEK7300
-cd mek7300
-pyinstaller mek7300.spec --noconfirm
-
-# VIDAS 1600
-cd vidas1600
-pyinstaller vidas1600.spec --noconfirm
-
-# Envio COM (ferramenta de teste, fonte em ../read)
-cd ../../read
-pyinstaller envio_com.spec --noconfirm
+cd c:\repositorio\leitor_hl7
+powershell -ExecutionPolicy Bypass -File .\build_all.ps1
 ```
 
-O executável e seu JSON de configuração são gerados em `build/<analisador>/` na raiz do projeto. O `envio_com.exe` é copiado para `build/bh5100/` (junto do `bh5100.exe` e dos `config_*.json`).
+O comando compila o código que está na branch atual do clone: confira a branch e o commit que ele mostra no início.
+
+- **Antes de compilar:** instala o que faltar de `requirements.txt` no `venv` e confere se cada analisador importa. Falha aqui interrompe o build.
+- **Executáveis:** `bh5100`, `coagmaster`, `mek7300`, `pkl`, `test_get_only` e `vidas1600`, em `build/<analisador>/`. O `test_get_only.exe` vai para `build/pkl/`.
+- **`envio_com`:** compilado se existir `..\read\envio_com.spec`, copiado para `build/bh5100/`. Sem essa pasta aparece como `PULADO`, sem falhar o build. Não é versionado.
+- **Resultado:** o script mostra uma tabela `OK`/`ERRO`/`PULADO`, grava a saída de cada executável em `build_logs/<nome>.log` e, com qualquer `ERRO`, sai com código 1 sem commitar.
+- **Commit:** feito só com todos os executáveis OK, e cancelado se houver token preenchido em arquivo versionado. Use `-SkipGit` para só compilar.
+
+O envio ao GitHub é um comando separado para cada repositório. Ele envia a branch atual, e recusa se houver alteração sem commit ou token preenchido:
+
+```powershell
+# Vida-Exames/HL7_integrator
+powershell -ExecutionPolicy Bypass -File .\enviar.ps1 empresa
+
+# souzagabrielscarvalho-hue/leitor_hl7 (repositório PÚBLICO)
+powershell -ExecutionPolicy Bypass -File .\enviar.ps1 pessoal
+```
+
+O `build/bh5100/config_bh5100.json` tem o token da máquina e não é versionado. Em um PC novo, crie-o a partir de `config_bh5100.example.json`.
+
+## Testes
+
+```powershell
+python -m unittest discover -s tests -v
+```
 
 > ⚠️ **Antes de gerar o executável**, verifique se a variável `COM_PORT` no arquivo `.py` corresponde à porta onde o cabo do equipamento está conectado. Consulte o Gerenciador de Dispositivos do Windows para confirmar. Após a build, você pode editar o arquivo `config_*.json` ao lado do `.exe` para alterar a porta COM sem precisar recompilar.
 
@@ -212,7 +231,8 @@ Os analisadores criam as seguintes pastas na Área de Trabalho do usuário:
 
 ## Requisitos
 
-- Python 3.13+
+Python 3.13+ e as dependências de `requirements.txt` (o `build_all.ps1` instala o que faltar):
+
 - `pyserial`
 - `requests`
 - `pillow` (conversão das imagens BMP do BH5100 para PNG)

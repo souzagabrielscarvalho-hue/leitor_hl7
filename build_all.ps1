@@ -1,47 +1,30 @@
 # =============================================================================
-# build_all.ps1 - Script para compilar todos os .exe e preparar para deploy
+# build_all.ps1 - Compila todos os .exe e prepara para deploy
 # =============================================================================
-# Uso: .\build_all.ps1
-# Este script:
-#   1. Compila todos os .exe usando PyInstaller com os arquivos .spec
-#   2. Copia os .exe para as pastas em build/
-#   3. Faz commit e push para o repositório
+# Uso:
+#   .\build_all.ps1            compila tudo e, sem nenhum erro, faz o commit
+#   .\build_all.ps1 -SkipGit   so compila, sem mexer no git
+#
+# O envio ao GitHub e separado, um comando por repositorio (ver enviar.ps1).
+# Sai com codigo 1 se algo falhar; nesse caso nada e commitado.
+#
+# Mantenha este arquivo somente em ASCII: o PowerShell 5.1 le script UTF-8 sem
+# BOM como ANSI e corrompe os acentos.
 # =============================================================================
+
+param([switch]$SkipGit)
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$LogDir = Join-Path $ProjectRoot "build_logs"
+$Resultados = New-Object System.Collections.ArrayList
 
-# Ativar o ambiente virtual
-$venvPython = Join-Path $ProjectRoot "venv\Scripts\python.exe"
-$venvActivate = Join-Path $ProjectRoot "venv\Scripts\Activate.ps1"
+# Token preenchido em arquivo versionado. O padrao nao usa aspas porque o
+# PowerShell 5.1 nao as repassa corretamente para programas nativos.
+$PadraoToken = 'exam_images_machine_token.{1,6}[A-Za-z0-9]{20,}'
 
-if (Test-Path $venvActivate) {
-    Write-Host "  Ativando ambiente virtual..." -ForegroundColor Gray
-    . $venvActivate
-} else {
-    Write-Host "  AVISO: Ambiente virtual nao encontrado em $venvActivate" -ForegroundColor Yellow
-    Write-Host "  Continuando com Python do sistema..." -ForegroundColor Yellow
-}
-
-Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "  Build All - Leitor HL7" -ForegroundColor Cyan
-Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host ""
-
-# O BH5100 converte os BMP do HL7 para PNG antes de enviar ao S3; sem Pillow
-# o exe compila, mas as imagens sao ignoradas em runtime.
-$pythonExe = if (Test-Path $venvPython) { $venvPython } else { "python" }
-& $pythonExe -c "import PIL" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  AVISO: Pillow nao instalado. Rode: $pythonExe -m pip install pillow" -ForegroundColor Yellow
-    Write-Host "         Sem ele o BH5100 envia o hemograma, mas nao as imagens." -ForegroundColor Yellow
-    Write-Host ""
-}
-
-# -------------------------------------------------------------------------
-# Definir as máquinas (nome da pasta = nome do spec = nome do exe)
-# -------------------------------------------------------------------------
-$maquinas = @(
+# Nome da pasta do spec, nome do spec e nome do exe.
+$Maquinas = @(
     @{ Nome = "bh5100";     SpecDir = "bh5100" },
     @{ Nome = "coagmaster"; SpecDir = "Coagmaster" },
     @{ Nome = "mek7300";    SpecDir = "mek7300" },
@@ -49,215 +32,271 @@ $maquinas = @(
     @{ Nome = "vidas1600";  SpecDir = "vidas1600" }
 )
 
-# -------------------------------------------------------------------------
-# Etapa 1: Compilar cada .exe
-# -------------------------------------------------------------------------
-Write-Host "[1/3] Compilando executáveis com PyInstaller..." -ForegroundColor Yellow
-Write-Host ""
+function Abortar {
+    param([string]$Mensagem)
+    Write-Host ""
+    Write-Host "BUILD INTERROMPIDO: $Mensagem" -ForegroundColor Red
+    exit 1
+}
 
-foreach ($m in $maquinas) {
-    $nome     = $m.Nome
-    $specDir  = $m.SpecDir
-    $specPath = Join-Path $ProjectRoot "$specDir\$nome.spec"
-    $destDir  = Join-Path $ProjectRoot "build\$nome"
+function Invoke-Nativo {
+    param(
+        [string]$Exe,
+        [string[]]$Argumentos,
+        [string]$LogPath = ""
+    )
 
-    Write-Host "  -> Compilando $nome..." -ForegroundColor White -NoNewline
+    # O PowerShell 5.1 transforma o stderr de programas nativos em erro e, com
+    # "Stop", aborta o script mesmo quando o programa funcionou. O PyInstaller
+    # escreve todo o progresso no stderr. Vale so dentro desta funcao.
+    $ErrorActionPreference = "Continue"
+
+    $codigo = 1
+    $saida = @()
+    try {
+        $saida = @(& $Exe @Argumentos 2>&1 | ForEach-Object { "$_" })
+        $codigo = $LASTEXITCODE
+    } catch {
+        # Programa nao encontrado: $LASTEXITCODE ficaria com o valor anterior.
+        $saida = @("$_")
+    }
+
+    if ($LogPath) {
+        $saida | Out-File -FilePath $LogPath -Encoding UTF8
+    }
+
+    return [pscustomobject]@{ Codigo = $codigo; Saida = $saida }
+}
+
+function Mostrar-Saida {
+    param([string[]]$Saida, [int]$Linhas = 15)
+    $Saida | Select-Object -Last $Linhas | ForEach-Object {
+        Write-Host "       $_" -ForegroundColor DarkGray
+    }
+}
+
+function Registrar {
+    param([string]$Nome, [string]$Status, [string]$Detalhe = "")
+    [void]$Resultados.Add([pscustomobject]@{
+        Nome = $Nome; Status = $Status; Detalhe = $Detalhe
+    })
+}
+
+function Build-Exe {
+    param([string]$Nome, [string]$SpecDir, [string]$DestDir)
+
+    $specPath = Join-Path $SpecDir "$Nome.spec"
+    $exeDist  = Join-Path $SpecDir "dist\$Nome.exe"
+    $logPath  = Join-Path $LogDir "$Nome.log"
+
+    Write-Host "  -> Compilando $Nome..." -ForegroundColor White -NoNewline
 
     if (-not (Test-Path $specPath)) {
-        Write-Host " SPEC NAO ENCONTRADO ($specPath)" -ForegroundColor Red
-        continue
+        Write-Host " ERRO" -ForegroundColor Red
+        Registrar $Nome "ERRO" "spec nao encontrado: $specPath"
+        return
     }
 
-    # Executar PyInstaller a partir do diretório do spec (para pathex funcionar)
-    Push-Location (Join-Path $ProjectRoot $specDir)
-    $ErrorActionPreference = "Continue"
-    pyinstaller --noconfirm --clean $specPath 2>&1 | Out-Null
-    $buildResult = $LASTEXITCODE
-    $ErrorActionPreference = "Stop"
-    Pop-Location
+    # Exe de um build anterior em dist\ nao pode passar por exe novo.
+    Remove-Item -Force -ErrorAction SilentlyContinue $exeDist
 
-    if ($buildResult -ne 0) {
-        Write-Host " ERRO (exit code: $buildResult)" -ForegroundColor Red
-        continue
+    # Roda a partir da pasta do spec, para o pathex=['..'] funcionar.
+    Push-Location $SpecDir
+    try {
+        $r = Invoke-Nativo $PythonExe @("-m", "PyInstaller", "--noconfirm", "--clean", $specPath) $logPath
+    } finally {
+        Pop-Location
     }
 
-    # O exe gerado fica em dist/<nome>.exe (dentro do diretório do spec)
-    $exeSource = Join-Path $ProjectRoot "$specDir\dist\$nome.exe"
-
-    if (-not (Test-Path $exeSource)) {
-        # Tentar caminho alternativo: dist/<nome>.exe na raiz
-        $exeSource = Join-Path $ProjectRoot "dist\$nome.exe"
+    if ($r.Codigo -ne 0) {
+        Write-Host " ERRO" -ForegroundColor Red
+        Mostrar-Saida $r.Saida
+        Registrar $Nome "ERRO" "PyInstaller saiu com codigo $($r.Codigo); ver $logPath"
+        return
     }
 
-    if (-not (Test-Path $exeSource)) {
-        Write-Host " EXE NAO ENCONTRADO apos build" -ForegroundColor Red
-        continue
+    if (-not (Test-Path $exeDist)) {
+        Write-Host " ERRO" -ForegroundColor Red
+        Registrar $Nome "ERRO" "exe nao encontrado apos o build; ver $logPath"
+        return
     }
 
-    # Criar pasta de destino se nao existir
-    if (-not (Test-Path $destDir)) {
-        New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+    try {
+        if (-not (Test-Path $DestDir)) {
+            New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
+        }
+        Copy-Item -Path $exeDist -Destination $DestDir -Force
+    } catch {
+        Write-Host " ERRO" -ForegroundColor Red
+        Registrar $Nome "ERRO" "nao foi possivel copiar para $DestDir (o exe esta aberto?): $_"
+        return
     }
 
-    # Copiar o exe para build/<nome>/
-    Copy-Item -Path $exeSource -Destination $destDir -Force
     Write-Host " OK" -ForegroundColor Green
+    Registrar $Nome "OK" (Join-Path $DestDir "$Nome.exe")
 }
 
-Write-Host ""
-Write-Host "  Compilacao concluida!" -ForegroundColor Green
-Write-Host ""
-
-# -------------------------------------------------------------------------
-# Build do envio_com (ferramenta de teste do BH5100, pasta irma ..\read)
-# -------------------------------------------------------------------------
-$envioDir  = Join-Path (Split-Path -Parent $ProjectRoot) "read"
-$envioSpec = Join-Path $envioDir "envio_com.spec"
-$envioDest = Join-Path $ProjectRoot "build\bh5100"
-
-if (Test-Path $envioSpec) {
-    Write-Host "  -> Compilando envio_com..." -ForegroundColor White -NoNewline
-
-    Push-Location $envioDir
-    $ErrorActionPreference = "Continue"
-    pyinstaller --noconfirm --clean $envioSpec 2>&1 | Out-Null
-    $buildResultEnvio = $LASTEXITCODE
-    $ErrorActionPreference = "Stop"
-    Pop-Location
-
-    $envioExe = Join-Path $envioDir "dist\envio_com.exe"
-
-    if ($buildResultEnvio -ne 0) {
-        Write-Host " ERRO (exit code: $buildResultEnvio)" -ForegroundColor Red
-    } elseif (-not (Test-Path $envioExe)) {
-        Write-Host " EXE NAO ENCONTRADO apos build" -ForegroundColor Red
-    } else {
-        if (-not (Test-Path $envioDest)) {
-            New-Item -ItemType Directory -Path $envioDest -Force | Out-Null
-        }
-        Copy-Item -Path $envioExe -Destination $envioDest -Force
-
-        # Nao sobrescreve a configuracao ja ajustada no PC.
-        $envioConfigSrc = Join-Path $envioDir "config_envio_com.json"
-        $envioConfigDst = Join-Path $envioDest "config_envio_com.json"
-        if ((Test-Path $envioConfigSrc) -and -not (Test-Path $envioConfigDst)) {
-            Copy-Item -Path $envioConfigSrc -Destination $envioConfigDst -Force
-        }
-
-        Write-Host " OK" -ForegroundColor Green
-    }
-} else {
-    Write-Host "  AVISO: $envioSpec nao encontrado; envio_com nao foi compilado." -ForegroundColor Yellow
-}
-
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "  Build All - Leitor HL7" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
 
 # -------------------------------------------------------------------------
-# Build extra: test_get_only.exe (mesmo diretorio pkl, destino build/pkl/)
+# Etapa 1: Verificacao previa (falha aqui nao gera nenhum exe)
 # -------------------------------------------------------------------------
-Write-Host "  -> Compilando test_get_only..." -ForegroundColor White -NoNewline
-
-$specPathTgo = Join-Path $ProjectRoot "pkl\test_get_only.spec"
-$destDirTgo  = Join-Path $ProjectRoot "build\pkl"
-
-if (-not (Test-Path $specPathTgo)) {
-    Write-Host " SPEC NAO ENCONTRADO ($specPathTgo)" -ForegroundColor Red
-} else {
-    Push-Location (Join-Path $ProjectRoot "pkl")
-    $ErrorActionPreference = "Continue"
-    pyinstaller --noconfirm --clean $specPathTgo 2>&1 | Out-Null
-    $buildResultTgo = $LASTEXITCODE
-    $ErrorActionPreference = "Stop"
-    Pop-Location
-
-    if ($buildResultTgo -ne 0) {
-        Write-Host " ERRO (exit code: $buildResultTgo)" -ForegroundColor Red
-    } else {
-        $exeSourceTgo = Join-Path $ProjectRoot "pkl\dist\test_get_only.exe"
-        if (-not (Test-Path $exeSourceTgo)) {
-            $exeSourceTgo = Join-Path $ProjectRoot "dist\test_get_only.exe"
-        }
-
-        if (-not (Test-Path $exeSourceTgo)) {
-            Write-Host " EXE NAO ENCONTRADO apos build" -ForegroundColor Red
-        } else {
-            if (-not (Test-Path $destDirTgo)) {
-                New-Item -ItemType Directory -Path $destDirTgo -Force | Out-Null
-            }
-            Copy-Item -Path $exeSourceTgo -Destination $destDirTgo -Force
-            Write-Host " OK" -ForegroundColor Green
-        }
-    }
-}
-
-Write-Host ""
-
-# -------------------------------------------------------------------------
-# Etapa 2: Limpar artefatos temporarios do PyInstaller
-# -------------------------------------------------------------------------
-
-# Remover pastas dist/ e arquivos temporarios em cada diretorio de spec
-foreach ($m in $maquinas) {
-    $specDir = $m.SpecDir
-    $distDir = Join-Path $ProjectRoot "$specDir\dist"
-    $buildDir = Join-Path $ProjectRoot "$specDir\build"
-
-    if (Test-Path $distDir)  { Remove-Item -Recurse -Force $distDir }
-    if (Test-Path $buildDir) { Remove-Item -Recurse -Force $buildDir }
-}
-
-# Remover dist/ e build/ na raiz (se existirem)
-$rootDist  = Join-Path $ProjectRoot "dist"
-$rootBuild = Join-Path $ProjectRoot "build_temp"
-if (Test-Path $rootDist) { Remove-Item -Recurse -Force $rootDist }
-
-Write-Host "  Limpeza concluida!" -ForegroundColor Green
-Write-Host ""
-
-# -------------------------------------------------------------------------
-# Etapa 3: Commit e Push
-# -------------------------------------------------------------------------
-Write-Host "[3/3] Commit e Push para o repositorio..." -ForegroundColor Yellow
-Write-Host ""
+Write-Host "[1/3] Verificacao previa..." -ForegroundColor Yellow
 
 Push-Location $ProjectRoot
-
-# Adicionar remote 'personal' se nao existir
-$remotes = git remote
-if ($remotes -notcontains "personal") {
-    Write-Host "  Adicionando remote 'personal'..." -ForegroundColor White
-    git remote add personal https://github.com/souzagabrielscarvalho-hue/leitor_hl7.git
-}
-
-# Adicionar arquivos
-Write-Host "  Adicionando arquivos ao git..." -ForegroundColor White
-git add -A
-
-# Verificar se ha mudancas para commit
-$status = git status --porcelain
-if ([string]::IsNullOrWhiteSpace($status)) {
-    Write-Host "  Nenhuma mudanca detectada. Nada para commit." -ForegroundColor Yellow
-} else {
-    # Commit
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    git commit -m "Build automatico - $timestamp"
-    Write-Host "  Commit realizado com sucesso!" -ForegroundColor Green
-}
-
-# Push
-Write-Host "  Enviando para o repositorio..." -ForegroundColor White
-
-# Push para o remote 'origin' (repositorio principal)
-Write-Host "  -> origin..." -ForegroundColor White
-git push origin main
-
-# Push para o remote 'personal' (mirror)
-Write-Host "  -> personal..." -ForegroundColor White
-git push personal main
-
+$versao = (Invoke-Nativo "git" @("log", "-1", "--format=%h %s")).Saida
+$branch = (Invoke-Nativo "git" @("rev-parse", "--abbrev-ref", "HEAD")).Saida
 Pop-Location
+Write-Host "  Codigo: $branch | $versao" -ForegroundColor White
+
+$venvPython = Join-Path $ProjectRoot "venv\Scripts\python.exe"
+if (Test-Path $venvPython) {
+    $PythonExe = $venvPython
+} else {
+    $pythonSistema = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pythonSistema) {
+        Abortar "Python nao encontrado (nem $venvPython, nem no PATH)."
+    }
+    $PythonExe = $pythonSistema.Source
+    Write-Host "  AVISO: venv nao encontrado; usando $PythonExe" -ForegroundColor Yellow
+}
+Write-Host "  Python: $PythonExe" -ForegroundColor White
+
+# Sem Pillow o BH5100 compila, mas ignora as imagens em runtime.
+$importaDependencias = "import serial, requests, PIL, PyInstaller"
+if ((Invoke-Nativo $PythonExe @("-c", $importaDependencias)).Codigo -ne 0) {
+    Write-Host "  Instalando dependencias de requirements.txt..." -ForegroundColor White
+    $pip = Invoke-Nativo $PythonExe @("-m", "pip", "install", "-r", (Join-Path $ProjectRoot "requirements.txt"))
+    if ($pip.Codigo -ne 0) {
+        Mostrar-Saida $pip.Saida
+        Abortar "nao foi possivel instalar as dependencias."
+    }
+    if ((Invoke-Nativo $PythonExe @("-c", $importaDependencias)).Codigo -ne 0) {
+        Abortar "dependencias ausentes mesmo apos o pip install."
+    }
+}
+Write-Host "  Dependencias: OK" -ForegroundColor White
+
+# O PyInstaller compila mesmo faltando um modulo, e o exe so quebra ao abrir.
+foreach ($m in $Maquinas) {
+    Push-Location (Join-Path $ProjectRoot $m.SpecDir)
+    try {
+        $r = Invoke-Nativo $PythonExe @("-c", "import $($m.Nome)")
+    } finally {
+        Pop-Location
+    }
+    if ($r.Codigo -ne 0) {
+        Mostrar-Saida $r.Saida 5
+        Abortar "$($m.Nome) nao importa: o exe quebraria ao abrir."
+    }
+}
+Write-Host "  Analisadores: OK" -ForegroundColor White
+Write-Host ""
+
+# -------------------------------------------------------------------------
+# Etapa 2: Compilar
+# -------------------------------------------------------------------------
+Write-Host "[2/3] Compilando executaveis com PyInstaller..." -ForegroundColor Yellow
+
+New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+
+foreach ($m in $Maquinas) {
+    Build-Exe $m.Nome (Join-Path $ProjectRoot $m.SpecDir) (Join-Path $ProjectRoot "build\$($m.Nome)")
+}
+
+# test_get_only: mesma pasta do pkl, mesmo destino.
+Build-Exe "test_get_only" (Join-Path $ProjectRoot "pkl") (Join-Path $ProjectRoot "build\pkl")
+
+# envio_com: ferramenta de teste do BH5100, fora deste repositorio (..\read).
+$envioDir  = Join-Path (Split-Path -Parent $ProjectRoot) "read"
+$envioDest = Join-Path $ProjectRoot "build\bh5100"
+
+if (Test-Path (Join-Path $envioDir "envio_com.spec")) {
+    Build-Exe "envio_com" $envioDir $envioDest
+
+    # Nao sobrescreve a configuracao ja ajustada no PC.
+    $envioConfigSrc = Join-Path $envioDir "config_envio_com.json"
+    $envioConfigDst = Join-Path $envioDest "config_envio_com.json"
+    if ((Test-Path $envioConfigSrc) -and -not (Test-Path $envioConfigDst)) {
+        Copy-Item -Path $envioConfigSrc -Destination $envioConfigDst -Force
+    }
+} else {
+    Write-Host "  -> envio_com PULADO" -ForegroundColor Yellow
+    Registrar "envio_com" "PULADO" "$envioDir\envio_com.spec nao encontrado"
+}
+
+# Artefatos temporarios do PyInstaller.
+foreach ($m in $Maquinas) {
+    foreach ($temporario in @("dist", "build")) {
+        $caminho = Join-Path $ProjectRoot "$($m.SpecDir)\$temporario"
+        if (Test-Path $caminho) {
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $caminho
+        }
+    }
+}
+
+Write-Host ""
+Write-Host "  Resultado:" -ForegroundColor White
+foreach ($r in $Resultados) {
+    $cor = switch ($r.Status) { "OK" { "Green" } "PULADO" { "Yellow" } default { "Red" } }
+    Write-Host ("    {0,-14} {1,-7} {2}" -f $r.Nome, $r.Status, $r.Detalhe) -ForegroundColor $cor
+}
+Write-Host ""
+
+$erros = @($Resultados | Where-Object { $_.Status -eq "ERRO" })
+if ($erros.Count -gt 0) {
+    Abortar "$($erros.Count) executavel(is) com erro. Nada foi commitado; os exes com erro NAO foram atualizados."
+}
+
+# -------------------------------------------------------------------------
+# Etapa 3: Commit
+# -------------------------------------------------------------------------
+if ($SkipGit) {
+    Write-Host "[3/3] Commit ignorado (-SkipGit)." -ForegroundColor Yellow
+} else {
+    Write-Host "[3/3] Commit..." -ForegroundColor Yellow
+
+    Push-Location $ProjectRoot
+
+    $add = Invoke-Nativo "git" @("add", "-A")
+    if ($add.Codigo -ne 0) {
+        Mostrar-Saida $add.Saida
+        Abortar "git add falhou."
+    }
+
+    # git grep sai com 0 quando encontra.
+    $vazamento = Invoke-Nativo "git" @("grep", "--cached", "-I", "-l", "-E", $PadraoToken)
+    if ($vazamento.Codigo -eq 0) {
+        Invoke-Nativo "git" @("reset", "--quiet") | Out-Null
+        Abortar "token preenchido em arquivo versionado, commit cancelado: $($vazamento.Saida -join ', ')"
+    }
+
+    $status = (Invoke-Nativo "git" @("status", "--porcelain")).Saida
+    if (-not (($status -join "").Trim())) {
+        Write-Host "  Nenhuma mudanca detectada. Nada para commit." -ForegroundColor Yellow
+    } else {
+        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        $commit = Invoke-Nativo "git" @("commit", "-m", "Build automatico - $timestamp")
+        if ($commit.Codigo -ne 0) {
+            Mostrar-Saida $commit.Saida
+            Abortar "git commit falhou."
+        }
+        Write-Host "  Commit realizado com sucesso!" -ForegroundColor Green
+    }
+
+    Pop-Location
+
+    Write-Host ""
+    Write-Host "  Para enviar, um comando por repositorio:" -ForegroundColor White
+    Write-Host "    powershell -ExecutionPolicy Bypass -File .\enviar.ps1 empresa" -ForegroundColor White
+    Write-Host "    powershell -ExecutionPolicy Bypass -File .\enviar.ps1 pessoal" -ForegroundColor White
+}
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "  Processo concluido com sucesso!" -ForegroundColor Green
 Write-Host "============================================================" -ForegroundColor Cyan
+exit 0

@@ -13,6 +13,16 @@ __pycache__/
 *.exe
 !build/**/*.exe
 
+# Config real do BH5100: tem o token da máquina (modelo em config_bh5100.example.json)
+build/bh5100/config_bh5100.json
+
+# Ferramenta de teste: o exe embute uma mensagem HL7 de referência
+build/bh5100/envio_com.exe
+build/bh5100/config_envio_com.json
+
+# Saída do build_all.ps1
+build_logs/
+
 # Virtual environment
 venv/
 env/
