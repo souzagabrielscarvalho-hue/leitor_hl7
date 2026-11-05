@@ -13,7 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # Adiciona raiz do projeto ao path para importar shared
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from shared.base_analisador import BaseAnalisador, format_thousands, extrair_imagens_de_hl7
+from shared.base_analisador import BaseAnalisador, format_thousands, extrair_imagens_de_hl7_com_metadados
+from shared.exam_images_uploader import ExamImageUploader
 
 # ═══════════════════════════════════════════════════════════
 # CONSTANTES DE PROTOCOLO HL7/MLLP
@@ -45,6 +46,16 @@ MAPEAMENTO = {
     'BASO#':'BA',
     'BASO': 'BA_Percent',
     'BASO%':'BA_Percent',
+    # Populações adicionais do BH5100 (o back já mapeia NRBC/ALY/LIC).
+    'NRBC#': 'NRBC',
+    'NRBC':  'NRBC_Percent',
+    'NRBC%': 'NRBC_Percent',
+    'ALY#':  'ALY',
+    'ALY':   'ALY_Percent',
+    'ALY%':  'ALY_Percent',
+    'LIC#':  'LIC',
+    'LIC':   'LIC_Percent',
+    'LIC%':  'LIC_Percent',
     'RBC':  'RBC',
     'HGB':  'HGB',
     'HCT':  'HCT',
@@ -62,18 +73,22 @@ MAPEAMENTO = {
     'P_LCC':'P_LCC',
 }
 
-CAMPOS_ABSOLUTOS = {'WBC', 'NE', 'LY', 'MO', 'EO', 'BA', 'PLT'}
-CAMPOS_MULTIPLICAR = ('WBC', 'LY', 'MO', 'NE', 'EO', 'BA', 'PLT')
+CAMPOS_ABSOLUTOS = {'WBC', 'NE', 'LY', 'MO', 'EO', 'BA', 'NRBC', 'ALY', 'LIC', 'PLT'}
+CAMPOS_MULTIPLICAR = ('WBC', 'LY', 'MO', 'NE', 'EO', 'BA', 'NRBC', 'ALY', 'LIC', 'PLT')
 PERCENT_PAIRS = [
     ('LY_Percent', 'LY'),
     ('MO_Percent', 'MO'),
     ('EO_Percent', 'EO'),
     ('BA_Percent', 'BA'),
+    ('NRBC_Percent', 'NRBC'),
+    ('ALY_Percent', 'ALY'),
+    ('LIC_Percent', 'LIC'),
 ]
 
 ORDEM_TXT = [
     'WBC', 'NE', 'NE_Percent', 'LY', 'LY_Percent',
     'MO', 'MO_Percent', 'EO', 'EO_Percent', 'BA', 'BA_Percent',
+    'NRBC', 'NRBC_Percent', 'ALY', 'ALY_Percent', 'LIC', 'LIC_Percent',
     'RBC', 'HGB', 'HCT', 'MCV', 'MCH', 'MCHC', 'RDW', 'RDW_SD',
     'PLT', 'PCT', 'MPV', 'PDW', 'P_LCR', 'P_LCC',
 ]
@@ -118,10 +133,13 @@ def _parse_obx_segments(segments: List[str]) -> Dict[str, str]:
         if nome is None:
             continue
 
-        value = fields[5].lstrip('*')
+        # L/H são flags do resultado e *, quando presente, também faz parte do
+        # valor enviado pela máquina. O laboratório e o back aceitam esses
+        # caracteres; não devemos removê-los (ex.: 73.26H, 30.4L, *****L).
+        value = (fields[5] or '').strip()
         abnormal_flag = fields[8] if len(fields) > 8 else ""
         flag = abnormal_flag if abnormal_flag and abnormal_flag != 'N' else ''
-        resultados[nome] = f"{value}{flag}"
+        resultados[nome] = f"{value}{flag}" if value else ''
 
     return resultados
 
@@ -306,13 +324,18 @@ class AnalisadorBH5100(BaseAnalisador):
             logging.warning(f"Arquivo {nome_arquivo} está vazio.")
             return None
 
-        # Extrai imagens
+        # Extrai imagens; os metadados (OBX-3) dizem qual é WBC/RBC/PLT.
+        imagens_extraidas = []
         try:
             pasta_imagens = os.path.join(self.ENVIADOS_DIR, "imagens")
             prefixo = os.path.splitext(nome_arquivo)[0] + "_"
-            qtd = extrair_imagens_de_hl7(conteudo_hl7, pasta_imagens, prefixo)
-            if qtd > 0:
-                logging.info(f"{qtd} imagem(ns) extraída(s) de {nome_arquivo}.")
+            imagens_extraidas = extrair_imagens_de_hl7_com_metadados(
+                conteudo_hl7, pasta_imagens, prefixo
+            )
+            if imagens_extraidas:
+                logging.info(
+                    f"{len(imagens_extraidas)} imagem(ns) extraída(s) de {nome_arquivo}."
+                )
         except Exception as e:
             logging.warning(f"Erro ao extrair imagens de {nome_arquivo}: {e}")
 
@@ -369,7 +392,46 @@ class AnalisadorBH5100(BaseAnalisador):
             'ExamCode': 'HEMO',
             **campos,
         }
+
+        # Chave privada: sai do payload antes do POST do hemograma e é usada
+        # só depois que o resultado é aceito, em _enviar_payload_webhook().
+        if imagens_extraidas:
+            payload['_exam_images'] = imagens_extraidas
+
         return [payload]
+
+    def _enviar_payload_webhook(
+        self, payload: Dict[str, Any], nome_arquivo: str, tag_identifier: str = ""
+    ) -> bool:
+        """
+        Envia o hemograma e, se ele foi aceito, as imagens extraídas do HL7.
+
+        A imagem é complemento: falha no S3 não muda o resultado do exame nem
+        impede o arquivo de ir para 'enviados'.
+        """
+        imagens = payload.pop('_exam_images', [])
+
+        enviado = super()._enviar_payload_webhook(payload, nome_arquivo, tag_identifier)
+
+        if enviado and imagens:
+            try:
+                ExamImageUploader(
+                    api_url=self.EXAM_IMAGES_URL,
+                    token=self.EXAM_IMAGES_MACHINE_TOKEN,
+                    franchise_credential_id=self.FRANCHISE_CREDENTIAL_ID,
+                    machine=self.machine_id,
+                ).send(
+                    barcode=str(payload.get('FileName', '')),
+                    exam_code=str(payload.get('ExamCode', 'HEMO')),
+                    imagens=imagens,
+                )
+            except Exception as e:
+                logging.error(
+                    f"Erro ao enviar imagens de {nome_arquivo}: "
+                    f"{type(e).__name__}: {e}"
+                )
+
+        return enviado
 
 
 def _valor_zerado(valor_com_flag: str) -> bool:
@@ -394,11 +456,13 @@ if __name__ == "__main__":
         config_defaults={
             'com_port': 'COM3',
             'baud_rate': 9600,
-            'franchise_credential_id': 'f47d9a16-1a3c-4c2e-9e5f-6b3c8d7e9f0a',
+            'franchise_credential_id': '88cf9273-5044-47f4-b8f6-01160345a190',
             'webhook_url': (
                 'https://apoio.internal.vidaexame.com/api/integration/bh5100'
                 '?franchise_credential_id={franchise_credential_id}'
             ),
+            'exam_images_url': '',
+            'exam_images_machine_token': '',
         },
         health_port=8080,
     ).start()

@@ -32,6 +32,8 @@ No computador conectado à máquina, abra o **Gerenciador de Tarefas** (`Ctrl+Sh
 
 Se o processo **não estiver rodando**, reinicie-o (veja seção 2.4).
 
+> O programa encerra sozinho quando a porta COM fica mais de 5 minutos sem conexão, depois de enviar o que estiver em `gerados/`. Antes de fechar, ele mostra o popup **"Conexão perdida"** com a porta e o erro. O mesmo erro fica registrado no log. Verifique o cabo e abra o programa novamente.
+
 ### 2.2. Verificar o Health Check
 
 Abra o navegador no próprio computador e acesse a URL de health check da máquina correspondente (tabela acima). O retorno deve ser um JSON com status como:
@@ -132,7 +134,8 @@ O arquivo `config_<máquina>.json` contém a configuração da porta serial. Exe
 | Arquivos em `requisições não enviadas/` | Falha definitiva de envio (5 tentativas esgotadas) | Verifique o log para o erro específico; corrija e reinicie o serviço |
 | Erro `ClearCommError` no log | Problema transitório no driver serial do Windows | O sistema tenta recuperar automaticamente; se persistir, reconecte o cabo |
 | Erro 401/403 no webhook | `franchise_credential_id` inválido | Verifique o `config_*.json` e confirme o credential ID com o suporte |
-| Log com "Falha ao abrir porta serial" | Porta COM inexistente ou em uso por outro programa | Confira a porta no Gerenciador de Dispositivos; feche outros programas que usem a porta serial. O sistema continua tentando reconectar automaticamente |
+| Log com "Falha ao abrir porta serial" | Porta COM inexistente ou em uso por outro programa | Confira a porta no Gerenciador de Dispositivos; feche outros programas que usem a porta serial. O sistema tenta reconectar por até 5 minutos e depois mostra o popup e encerra |
+| Popup "Conexão perdida" | Cabo/adaptador desconectado ou porta COM errada | Leia o erro no popup, verifique o cabo e a porta e abra o programa novamente. Exames listados como pendentes são enviados na próxima abertura |
 
 ---
 

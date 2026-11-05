@@ -18,6 +18,10 @@ import os
 import sys
 from typing import Any, Dict, Tuple
 
+# Só existem no config da máquina que as declara nos defaults: máquina sem
+# imagem não ganha chave de token, e só o PKL tem pkl_machine_id.
+CHAVES_OPCIONAIS = ("pkl_machine_id", "exam_images_url", "exam_images_machine_token")
+
 
 def _get_app_dir(analisador_nome: str) -> str:
     """
@@ -50,11 +54,13 @@ def load_config(
                   - franchise_credential_id (str, opcional)
                   - webhook_url (str, opcional — se não informado, é montado
                     a partir de franchise_credential_id + url_base)
+                  - CHAVES_OPCIONAIS: entram no config só se presentes aqui
 
     Returns:
         Tuple[dict, str]: (config_dict, status_message)
         - config_dict: dicionário com as chaves com_port, baud_rate,
-          franchise_credential_id, webhook_url, config_file_path
+          franchise_credential_id, webhook_url, config_file_path e as
+          CHAVES_OPCIONAIS declaradas nos defaults
         - status_message: string informativa sobre o que ocorreu (carregado,
           criado, erro, etc.) — pode ser usada para logging após basicConfig()
     """
@@ -68,8 +74,10 @@ def load_config(
         "baud_rate": defaults.get("baud_rate", 9600),
         "franchise_credential_id": defaults.get("franchise_credential_id", ""),
         "webhook_url": defaults.get("webhook_url", ""),
-        "pkl_machine_id": defaults.get("pkl_machine_id", ""),
     }
+    for chave in CHAVES_OPCIONAIS:
+        if chave in defaults:
+            config[chave] = defaults[chave]
 
     status_msg = ""
 
@@ -83,7 +91,26 @@ def load_config(
                 if key in file_config:
                     config[key] = file_config[key]
 
-            status_msg = f"[Config] Arquivo de configuracao carregado: {config_path}"
+            # Versões novas podem acrescentar chaves (ex.: envio de imagens).
+            # Grava as que faltavam mantendo as chaves desconhecidas do arquivo.
+            faltantes = {key: value for key, value in config.items() if key not in file_config}
+
+            if faltantes:
+                file_config.update(faltantes)
+                try:
+                    with open(config_path, 'w', encoding='utf-8') as f:
+                        json.dump(file_config, f, indent=4, ensure_ascii=False)
+                    status_msg = (
+                        f"[Config] Arquivo de configuracao carregado: {config_path} "
+                        f"(chaves novas: {', '.join(faltantes)})"
+                    )
+                except IOError as e:
+                    status_msg = (
+                        f"[Config] Arquivo de configuracao carregado: {config_path} "
+                        f"(nao foi possivel gravar chaves novas: {e})"
+                    )
+            else:
+                status_msg = f"[Config] Arquivo de configuracao carregado: {config_path}"
         except (json.JSONDecodeError, IOError) as e:
             status_msg = f"[Config] Erro ao ler {config_path}: {e}. Usando valores padrao."
     else:
