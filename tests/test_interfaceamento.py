@@ -108,6 +108,7 @@ class ServidorFalso:
     def __init__(self) -> None:
         self.requisicoes = []
         self.status_webhook = 200
+        self.corpo_webhook = {"ok": True}
         dono = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -152,7 +153,7 @@ class ServidorFalso:
                         "completed": ids, "missing": [], "failed": [], "not_found": [],
                     }})
                 else:
-                    self._responder(dono.status_webhook, {"ok": True})
+                    self._responder(dono.status_webhook, dono.corpo_webhook)
 
             def do_PUT(self):
                 self._registrar()
@@ -597,6 +598,33 @@ class TestGerados(BaseTeste):
         self.enviar_uma_vez(analisador)
 
         self.assertIn("exame.txt", os.listdir(analisador.REQUISICOES_NAO_ENVIADAS_DIR))
+
+    def _enviar_com_resposta(self, corpo: dict) -> tuple:
+        self.servidor.corpo_webhook = corpo
+        analisador = self.criar("vidas1600")
+        self.gravar_exame(analisador, "exame.hl7", HL7_VIDAS)
+        self.enviar_uma_vez(analisador)
+        return (
+            os.listdir(analisador.ENVIADOS_DIR),
+            os.listdir(analisador.REQUISICOES_NAO_ENVIADAS_DIR),
+        )
+
+    def test_200_com_data_nulo_vai_para_nao_enviadas(self) -> None:
+        # O lab-apoio respondia 200 com data nulo até em erro de processamento.
+        enviados, nao_enviados = self._enviar_com_resposta(
+            {"message": "Etiqueta não encontrada", "data": None}
+        )
+        self.assertIn("exame.hl7", nao_enviados)
+        self.assertNotIn("exame.hl7", enviados)
+        self.assertEqual(len(self.servidor.caminhos("/integration/vidas1600")), 1)
+
+    def test_200_com_data_vazio_vai_para_nao_enviadas(self) -> None:
+        _, nao_enviados = self._enviar_com_resposta({"message": "ok", "data": []})
+        self.assertIn("exame.hl7", nao_enviados)
+
+    def test_200_com_resultados_vai_para_enviados(self) -> None:
+        enviados, _ = self._enviar_com_resposta({"message": "ok", "data": [{"id": 1}]})
+        self.assertIn("exame.hl7", enviados)
 
     def test_porta_de_health_ocupada_nao_derruba_o_programa(self) -> None:
         analisador = self.criar("coagmaster")

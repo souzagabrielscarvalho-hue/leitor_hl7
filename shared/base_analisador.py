@@ -72,6 +72,26 @@ COMM_ERROR_RESET_INTERVAL = 60  # Segundos sem erro para resetar o contador
 # UTILITÁRIOS COMPARTILHADOS
 # ═══════════════════════════════════════════════════════════════
 
+def _recusa_em_resposta_ok(resp: Any) -> Optional[str]:
+    """
+    Resposta 200/201 do lab-apoio que, na verdade, não gravou nada.
+
+    As rotas de integração devolvem {"message": ..., "data": ...}; em erro,
+    várias delas respondem 200 com "data" nulo, e sem resultado gravado o
+    "data" vem vazio. Devolve o texto para o log nesses casos, ou None quando
+    o envio foi aceito (inclusive resposta sem JSON ou sem a chave "data").
+    """
+    try:
+        corpo = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(corpo, dict) or "data" not in corpo:
+        return None
+    if corpo["data"] in (None, [], {}):
+        return str(corpo.get("message") or resp.text)[:300]
+    return None
+
+
 def format_thousands(value_str: str) -> str:
     """
     Formata valor numérico com separador de milhar.
@@ -641,6 +661,17 @@ class BaseAnalisador:
                 self._last_webhook_status = resp.status_code
 
                 if resp.status_code in (200, 201):
+                    recusa = _recusa_em_resposta_ok(resp)
+                    if recusa is not None:
+                        # O lab-apoio responde 200 até em erro, com "data" nulo
+                        # (ou vazio quando nada foi gravado): é rejeição de
+                        # negócio, como o 400, e repetir não resolve.
+                        logging.error(
+                            f"✗ [{tentativa}/{MAX_RETRY}] {nome_arquivo} "
+                            f"(tag: {tag_identifier}): status {resp.status_code}, "
+                            f"mas nenhum resultado foi gravado. Resposta: {recusa}"
+                        )
+                        return False
                     logging.info(
                         f"✓ [{tentativa}/{MAX_RETRY}] {nome_arquivo} "
                         f"(tag: {tag_identifier}) enviado com sucesso. "
