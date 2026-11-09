@@ -207,6 +207,8 @@ python ca_series\COM_simulator.py --dry-run                           # só most
 python ca_series\COM_simulator.py --list-ports
 ```
 
+Configuração em `config_simulador_ca_series.json`, ao lado do `.exe` (modelo em `build/ca_series/`; se faltar, o `.exe` cria um com os valores padrão): `port` (a outra ponta do par, padrão `COM8`), `baud_rate`, `etiqueta` padrão, `timeout`, `modo` (`paciente`, `qc`, `consulta` ou vazio para perguntar), `rack`/`tubo` e a lista `itens` do resultado de paciente (`nome`, `valor`, `unidade`, `referencia`, `flag`, `absorbancia`). A linha de comando tem prioridade sobre o JSON. O `.exe` espera um Enter antes de fechar (`"pausar_ao_final": false` ou `--sem-pausa` desligam).
+
 Ele envia a mensagem, espera a resposta (padrão 10s, `--timeout`), confere o tipo, o `MSA|AA` e se o MSA.2 bate com o MSH.10 enviado, e sai com código 0 em sucesso. Na consulta, se o LIS responder `QAK|SR|OK`, espera o `DSR^Q03` e devolve o `ACK^Q03`.
 
 ## Queda da conexão COM

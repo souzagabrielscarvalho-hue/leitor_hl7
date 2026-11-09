@@ -254,6 +254,51 @@ class TestSimuladorDryRun(unittest.TestCase):
                     sim.main(["--modo", modo, "--etiqueta", "123", "--dry-run"]), 0
                 )
 
+    def test_json_de_apoio_define_porta_e_itens(self) -> None:
+        import tempfile
+        pasta = tempfile.mkdtemp()
+        cfg = os.path.join(pasta, "cfg.json")
+        with open(cfg, "w", encoding="utf-8") as f:
+            json.dump({"port": "COM42", "baud_rate": 19200, "etiqueta": "999",
+                       "itens": [{"nome": "GGT", "valor": "80", "flag": "H"}]}, f)
+        aberturas = []
+
+        def serial_falsa(porta, baud, timeout=1):
+            aberturas.append((porta, baud))
+            raise __import__("serial").SerialException("sem porta")
+
+        saida = []
+        with mock.patch("serial.Serial", serial_falsa), \
+                mock.patch("builtins.print", lambda *a, **k: saida.append(" ".join(map(str, a)))), \
+                mock.patch("ca_series.COM_simulator.listar_portas"):
+            codigo = sim.main(["--config", cfg, "--modo", "paciente", "--etiqueta", ""])
+        self.assertEqual(codigo, 2)
+        self.assertEqual(aberturas, [("COM42", 19200)])
+        texto = "\n".join(saida)
+        self.assertIn("OBR|1|999|", texto)
+        self.assertIn("|GGT|80|", texto)
+        self.assertIn("1 resultado(s)", texto)
+
+    def test_json_invalido_usa_padrao(self) -> None:
+        import tempfile
+        cfg = os.path.join(tempfile.mkdtemp(), "cfg.json")
+        with open(cfg, "w") as f:
+            f.write("{ quebrado")
+        config, situacao = sim.carregar_config(cfg)
+        self.assertIn("ERRO", situacao)
+        self.assertEqual(config["port"], "COM8")
+
+    def test_exe_espera_enter_antes_de_fechar(self) -> None:
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(sys, "executable", os.path.join(RAIZ, "nao_existe", "x.exe")), \
+                mock.patch("builtins.print"), \
+                mock.patch("builtins.input", return_value="") as entrada:
+            sim.main(["--modo", "qc", "--dry-run"])
+            entrada.assert_called_once()
+            entrada.reset_mock()
+            sim.main(["--modo", "qc", "--dry-run", "--sem-pausa"])
+            entrada.assert_not_called()
+
     def test_mensagens_do_simulador_sao_lidas_pelo_parser(self) -> None:
         msg = sim.msg_paciente("ABC123").decode("latin-1")
         campos = parse_hl7_to_dict(msg)

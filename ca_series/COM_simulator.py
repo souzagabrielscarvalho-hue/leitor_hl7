@@ -22,13 +22,24 @@ Uso:
     python COM_simulator.py --modo consulta --port COM8 --etiqueta 151020262929
     python COM_simulator.py --dry-run               # mostra a mensagem e sai
     python COM_simulator.py --list-ports
+
+Configuração (config_simulador_ca_series.json, ao lado do .exe ou deste
+script): porta, velocidade, etiqueta, timeout, modo e a lista de itens do
+resultado de paciente. A linha de comando tem prioridade sobre o JSON. O .exe
+cria o JSON com os valores padrão se ele não existir.
+
+O .exe espera um Enter antes de fechar, para dar tempo de ler o resultado
+(desligue com "pausar_ao_final": false ou --sem-pausa).
 """
 
 import argparse
 import datetime
+import json
+import os
+import traceback
 import sys
 import time
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 SB = b"\x0b"
 EB = b"\x1c"
@@ -59,6 +70,70 @@ ITENS_PACIENTE: List[Tuple[str, str, str, str, str, str, str]] = [
     ("13", "TG", "1.45", "mmol/L", "0.00-1.70", "N", "0.2044"),
 ]
 
+NOME_CONFIG = "config_simulador_ca_series.json"
+CONFIG_PADRAO: Dict[str, Any] = {
+    "port": PORTA_PADRAO,
+    "baud_rate": BAUD_PADRAO,
+    "etiqueta": ETIQUETA_PADRAO,
+    "timeout": 10,
+    "modo": "",
+    "pausar_ao_final": True,
+    "rack": "N0001",
+    "tubo": "1",
+    "itens": [
+        {"nome": nome, "valor": val, "unidade": uni, "referencia": ref,
+         "flag": flag, "absorbancia": absb}
+        for (_no, nome, val, uni, ref, flag, absb) in ITENS_PACIENTE
+    ],
+}
+
+
+def pasta_do_programa() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def carregar_config(caminho: Optional[str] = None) -> Tuple[Dict[str, Any], str]:
+    """
+    Lê o JSON de apoio e completa com os padrões. Devolve (config, situação).
+    O .exe cria o arquivo com os padrões se ele não existir.
+    """
+    caminho = caminho or os.path.join(pasta_do_programa(), NOME_CONFIG)
+    config = json.loads(json.dumps(CONFIG_PADRAO))
+    if os.path.exists(caminho):
+        try:
+            with open(caminho, "r", encoding="utf-8-sig") as f:
+                dados = json.load(f)
+            if not isinstance(dados, dict):
+                raise ValueError("o conteudo precisa ser um objeto JSON { ... }")
+            config.update({k: v for k, v in dados.items() if not k.startswith("_")})
+            return config, f"lido de {caminho}"
+        except (OSError, ValueError) as e:
+            return config, f"ERRO ao ler {caminho} ({e}); usando valores padrao"
+    if getattr(sys, "frozen", False):
+        try:
+            with open(caminho, "w", encoding="utf-8") as f:
+                json.dump(CONFIG_PADRAO, f, indent=4, ensure_ascii=False)
+            return config, f"criado com valores padrao em {caminho}"
+        except OSError as e:
+            return config, f"nao foi possivel criar {caminho} ({e}); usando padrao"
+    return config, "nao encontrado; usando valores padrao"
+
+
+def itens_da_config(config: Dict[str, Any]) -> List[Tuple[str, str, str, str, str, str, str]]:
+    itens = []
+    for i, item in enumerate(config.get("itens") or [], start=0):
+        if not isinstance(item, dict) or not str(item.get("nome", "")).strip():
+            continue
+        itens.append((
+            str(item.get("item_no", i)), str(item["nome"]).strip(),
+            str(item.get("valor", "")), str(item.get("unidade", "")),
+            str(item.get("referencia", "")), str(item.get("flag", "N") or "N"),
+            str(item.get("absorbancia", "")),
+        ))
+    return itens or list(ITENS_PACIENTE)
+
 
 def _agora() -> datetime.datetime:
     return datetime.datetime.now()
@@ -74,7 +149,10 @@ def mllp(segmentos: List[str]) -> bytes:
     return SB + corpo.encode("latin-1", errors="replace") + EB + CR
 
 
-def msg_paciente(etiqueta: str, rack: str = "N0001", tubo: str = "1") -> bytes:
+def msg_paciente(
+    etiqueta: str, rack: str = "N0001", tubo: str = "1",
+    itens: Optional[List[Tuple[str, str, str, str, str, str, str]]] = None,
+) -> bytes:
     agora = _agora()
     ts = agora.strftime("%Y%m%d%H%M%S")
     cid = _control_id(agora)
@@ -86,7 +164,7 @@ def msg_paciente(etiqueta: str, rack: str = "N0001", tubo: str = "1") -> bytes:
         f"OBR|1|{etiqueta}|{cid}|{APP}^{MODELO}|0||{data}||||||ClinicalInfo001||"
         f"Serum|Doctor001|Dep001|||||||||||||||||||||||||||||",
     ]
-    for i, (no, nome, val, uni, ref, flag, absb) in enumerate(ITENS_PACIENTE, start=1):
+    for i, (no, nome, val, uni, ref, flag, absb) in enumerate(itens or ITENS_PACIENTE, start=1):
         segs.append(
             f"OBX|{i}|NM|{no}|{nome}|{val}|{uni}|{ref}|{flag}|||F||{absb}|{data}||Server||"
         )
@@ -233,22 +311,23 @@ def listar_portas() -> None:
         print(f"{p.device}\t{p.description}")
 
 
-def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Simulador HL7 do analisador URIT CA Series")
-    ap.add_argument("--modo", choices=["paciente", "qc", "consulta"])
-    ap.add_argument("--etiqueta", help=f"codigo de barras (OBR.2 / QRD.8) [{ETIQUETA_PADRAO}]")
-    ap.add_argument("--port", default=PORTA_PADRAO, help=f"porta COM [{PORTA_PADRAO}]")
-    ap.add_argument("--baud", type=int, default=BAUD_PADRAO, help=f"velocidade [{BAUD_PADRAO}]")
-    ap.add_argument("--timeout", type=float, default=10.0, help="espera pela resposta, em s [10]")
-    ap.add_argument("--dry-run", action="store_true", help="so mostra a mensagem, sem abrir a serial")
-    ap.add_argument("--list-ports", action="store_true", help="lista as portas e sai")
-    args = ap.parse_args(argv)
-
+def _executar(args: argparse.Namespace, config: Dict[str, Any], situacao: str) -> int:
     if args.list_ports:
         listar_portas()
         return 0
 
-    modo = args.modo
+    porta = args.port or str(config["port"])
+    baud = args.baud or int(config["baud_rate"])
+    timeout = args.timeout if args.timeout is not None else float(config["timeout"])
+    etiqueta_padrao = str(config.get("etiqueta") or ETIQUETA_PADRAO)
+    itens = itens_da_config(config)
+
+    print(f"Configuracao: {situacao}")
+
+    modo = args.modo or (str(config.get("modo") or "").strip().lower() or None)
+    if modo not in (None, "paciente", "qc", "consulta"):
+        print(f"  ! modo '{modo}' invalido no JSON (use paciente, qc ou consulta)")
+        modo = None
     if modo is None:
         print("Escolha a mensagem:")
         print("  1 - Resultado de paciente (ORU^R01, MSH.16=0)")
@@ -258,11 +337,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     etiqueta = args.etiqueta
     if etiqueta is None and modo != "qc":
-        etiqueta = input(f"Numero da etiqueta [{ETIQUETA_PADRAO}]: ").strip() or ETIQUETA_PADRAO
-    etiqueta = etiqueta or ETIQUETA_PADRAO
+        etiqueta = input(f"Numero da etiqueta [{etiqueta_padrao}]: ").strip() or etiqueta_padrao
+    etiqueta = etiqueta or etiqueta_padrao
 
     if modo == "paciente":
-        frame = msg_paciente(etiqueta)
+        frame = msg_paciente(etiqueta, str(config.get("rack", "")), str(config.get("tubo", "")), itens)
     elif modo == "qc":
         frame = msg_qc()
     else:
@@ -273,9 +352,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("=" * 62)
     if modo != "qc":
         print(f"  Etiqueta : {etiqueta}")
-    print(f"  Porta    : {args.port} @ {args.baud}")
+    print(f"  Porta    : {porta} @ {baud}")
     if modo == "paciente":
-        print(f"  Mensagem : {len(ITENS_PACIENTE)} resultado(s)")
+        print(f"  Mensagem : {len(itens)} resultado(s)")
     print("-" * 62)
     mostrar(frame)
     print("-" * 62)
@@ -286,21 +365,60 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     import serial
     try:
-        ser = serial.Serial(args.port, args.baud, timeout=1)
+        ser = serial.Serial(porta, baud, timeout=1)
     except serial.SerialException as e:
-        print(f"Erro ao abrir {args.port}: {e}")
+        print(f"Erro ao abrir {porta}: {e}")
+        print("Portas disponiveis:")
+        listar_portas()
+        print("Confira o \"port\" no JSON: deve ser a outra ponta do par com0com,")
+        print("e nao a porta em que o ca_series.exe esta escutando.")
         return 2
 
     try:
         ser.reset_input_buffer()
-        ok = fluxo_consulta(ser, frame, args.timeout) if modo == "consulta" \
-            else enviar_resultado(ser, frame, args.timeout)
+        ok = fluxo_consulta(ser, frame, timeout) if modo == "consulta" \
+            else enviar_resultado(ser, frame, timeout)
     finally:
         ser.close()
 
     print("=" * 62)
     print("FLUXO CONCLUIDO." if ok else "FLUXO COM FALHA: veja as mensagens acima.")
     return 0 if ok else 1
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(description="Simulador HL7 do analisador URIT CA Series")
+    ap.add_argument("--modo", choices=["paciente", "qc", "consulta"])
+    ap.add_argument("--etiqueta", help="codigo de barras (OBR.2 / QRD.8)")
+    ap.add_argument("--port", help="porta COM (padrao: JSON ou COM8)")
+    ap.add_argument("--baud", type=int, help="velocidade (padrao: JSON ou 9600)")
+    ap.add_argument("--timeout", type=float, help="espera pela resposta, em s (padrao: JSON ou 10)")
+    ap.add_argument("--config", help=f"caminho do JSON [{NOME_CONFIG} ao lado do programa]")
+    ap.add_argument("--dry-run", action="store_true", help="so mostra a mensagem, sem abrir a serial")
+    ap.add_argument("--list-ports", action="store_true", help="lista as portas e sai")
+    ap.add_argument("--sem-pausa", action="store_true", help="nao espera Enter antes de fechar")
+    args = ap.parse_args(argv)
+
+    config, situacao = carregar_config(args.config)
+    pausar = getattr(sys, "frozen", False) and bool(config.get("pausar_ao_final", True)) \
+        and not args.sem_pausa
+
+    try:
+        codigo = _executar(args, config, situacao)
+    except KeyboardInterrupt:
+        print("\nInterrompido.")
+        codigo = 130
+    except Exception:
+        print("ERRO INESPERADO:")
+        traceback.print_exc()
+        codigo = 3
+
+    if pausar:
+        try:
+            input("\nPressione Enter para fechar...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+    return codigo
 
 
 if __name__ == "__main__":
