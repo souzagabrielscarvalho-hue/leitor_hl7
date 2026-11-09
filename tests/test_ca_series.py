@@ -85,8 +85,9 @@ class TestParser(unittest.TestCase):
     def test_exemplo_do_manual(self) -> None:
         campos = parse_hl7_to_dict(ORU_MANUAL)
         self.assertEqual(campos["FileName"], "Barcode001")  # OBR.2
-        self.assertEqual(campos["ALB"], "0.0")               # OBX.5, não OBX.13
-        self.assertEqual(campos["TB"], "187.3")
+        self.assertEqual(campos["Alb"], "0.0")               # OBX.5, não OBX.13
+        self.assertEqual(campos["Bili T"], "187.3")
+        self.assertEqual(campos["IBIL"], "187.3")  # sem equivalente no VIDAS
         self.assertEqual(campos["A/G"], "10000000.00")
         por_exame = campos["results_by_exam"]
         self.assertEqual(set(por_exame), {"HEP"})
@@ -94,7 +95,7 @@ class TestParser(unittest.TestCase):
 
     def test_flag_anormal_vai_junto_do_valor(self) -> None:
         msg = ORU_MANUAL.replace("ALT|44286|U/L|0-50|N", "ALT|62|U/L|0-50|H")
-        self.assertEqual(parse_hl7_to_dict(msg)["ALT"], "62H")
+        self.assertEqual(parse_hl7_to_dict(msg)["TGP"], "62H")
 
     def test_sem_barcode_usa_sample_id(self) -> None:
         msg = ORU_MANUAL.replace("OBR|1|Barcode001|", "OBR|1||")
@@ -104,7 +105,7 @@ class TestParser(unittest.TestCase):
         msg = ORU_MANUAL.replace("|ALB|", "|XYZ|").replace("|TP|", "|tp|")
         por_exame = parse_hl7_to_dict(msg)["results_by_exam"]
         self.assertEqual(por_exame["QUIM"], {"XYZ": "0.0"})
-        self.assertIn("tp", por_exame["HEP"])
+        self.assertIn("PT", por_exame["HEP"])
 
     def test_txt(self) -> None:
         txt = parse_hl7_to_txt(ORU_MANUAL)
@@ -224,9 +225,10 @@ class TestSimuladorComLeitor(BaseTeste):
         por_exame = {p["ExamCode"]: p for p in payloads}
         self.assertEqual(set(por_exame), {"HEP", "GLI", "REN", "LIP"})
         self.assertTrue(all(p["FileName"] == "151020262929" for p in payloads))
-        self.assertEqual(por_exame["HEP"]["ALT"], "62H")
-        self.assertEqual(por_exame["LIP"]["TC"], "6.12H")
-        self.assertEqual(por_exame["GLI"]["GLU"], "5.42")
+        self.assertEqual(por_exame["HEP"]["TGP"], "62H")
+        self.assertEqual(por_exame["HEP"]["Alb"], "42.3")
+        self.assertEqual(por_exame["LIP"]["Col"], "6.12H")
+        self.assertEqual(por_exame["GLI"]["Gli"], "5.42")
 
     def test_qc_recebe_ack_e_nao_vai_ao_webhook(self) -> None:
         self.assertTrue(sim.enviar_resultado(self.lado_sim, sim.msg_qc(), timeout=5))

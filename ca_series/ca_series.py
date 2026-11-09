@@ -92,6 +92,36 @@ TEST_TO_EXAM_CODE = {
 
 
 # ═══════════════════════════════════════════════════════════
+# NOME URIT → NOME ACEITO PELO LAB-APOIO
+# ═══════════════════════════════════════════════════════════
+# O lab-apoio ainda não tem rota do CA Series: os resultados vão para a rota
+# do VIDAS 1600 (/api/integration/vidas1600), cujo serviço
+# (ReadBloodCountMachineVidas1600) só reconhece os nomes do VIDAS. Por isso o
+# payload usa o nome do VIDAS quando há equivalente (ALB → Alb → atributo
+# ALB). Itens sem equivalente vão com o nome da URIT; o lab-apoio os registra
+# como não mapeados e não grava.
+
+URIT_PARA_VIDAS = {
+    'ALT': 'TGP', 'GPT': 'TGP', 'AST': 'TGO', 'GOT': 'TGO',
+    'TB': 'Bili T', 'TBIL': 'Bili T', 'DB': 'Bili D', 'DBIL': 'Bili D',
+    'ALP': 'Falc', 'GGT': 'GGT', 'ALB': 'Alb', 'TP': 'PT', 'CHE': 'COLIN',
+    'UREA': 'Ureia', 'BUN': 'Ureia', 'CREA': 'Crea', 'CRE': 'Crea', 'UA': 'AUR',
+    'GLU': 'Gli', 'HBA1C': 'HbA1c', 'FRU': 'FRU',
+    'TC': 'Col', 'CHOL': 'Col', 'TG': 'Trig', 'HDL': 'HDL', 'HDL-C': 'HDL',
+    'CL': 'CL', 'CA': 'Ca', 'P': 'FOSF', 'PHOS': 'FOSF', 'MG': 'MG',
+    'CK': 'CKNAC', 'CK-MB': 'CKMB', 'CKMB': 'CKMB', 'LDH': 'LDH',
+    'CRP': 'PCR', 'HS-CRP': 'PCRu', 'HSCRP': 'PCRu',
+    'AMY': 'Ami', 'LPS': 'LIP', 'LIP': 'LIP',
+    'FE': 'Fe', 'FER': 'FERRI',
+    'ASO': 'ASO', 'RF': 'FR', 'LAC': 'LAC', 'UPRO': 'PTUR',
+}
+
+
+def nome_para_webhook(nome_urit: str) -> str:
+    return URIT_PARA_VIDAS.get(nome_urit.strip().upper(), nome_urit.strip())
+
+
+# ═══════════════════════════════════════════════════════════
 # FUNÇÕES DE PARSE HL7
 # ═══════════════════════════════════════════════════════════
 
@@ -179,6 +209,7 @@ def parse_hl7_to_dict(hl7_message: str) -> dict:
 
     Retorna {'FileName', 'ExamCode', <teste>: <valor[flag]>, ...,
     'results_by_exam': {exam_code: {teste: valor}}} ou {} em caso de erro.
+    <teste> é o nome aceito pelo lab-apoio (nome_para_webhook).
     """
     result: Dict[str, Any] = {}
     try:
@@ -192,12 +223,13 @@ def parse_hl7_to_dict(hl7_message: str) -> dict:
         nao_mapeados: List[str] = []
         for item in _ler_obx(segments):
             valor = f"{item['valor']}{item['flag']}"
-            result[item['nome']] = valor
+            chave = nome_para_webhook(item['nome'])
+            result[chave] = valor
             exam_code = exam_code_do_teste(item['nome'])
             if exam_code is None:
                 nao_mapeados.append(item['nome'])
                 exam_code = 'QUIM'
-            results_by_exam.setdefault(exam_code, {})[item['nome']] = valor
+            results_by_exam.setdefault(exam_code, {})[chave] = valor
 
         result['results_by_exam'] = results_by_exam
         if nao_mapeados:
@@ -463,7 +495,8 @@ if __name__ == "__main__":
             'baud_rate': 9600,
             'franchise_credential_id': '',
             'webhook_url': (
-                'https://apoio.internal.vidaexame.com/api/integration/ca-series'
+                # Rota do VIDAS 1600 até existir a do CA Series (ver URIT_PARA_VIDAS)
+                'https://apoio.internal.vidaexame.com/api/integration/vidas1600'
                 '?franchise_credential_id={franchise_credential_id}'
             ),
         },
