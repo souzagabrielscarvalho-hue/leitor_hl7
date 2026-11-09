@@ -196,7 +196,7 @@ Implementado a partir do *CA Series Automatic Chemistry Analyzer HL7 Interface D
 
 ### Simulador (`ca_series/COM_simulator.py`)
 
-Faz o papel do analisador numa ponta de um par virtual (com0com, ex.: `COM7 <-> COM8`), com o `ca_series` escutando na outra:
+Também compilado como `build/ca_series/simulador_ca_series.exe` (console, spec em `ca_series/simulador_ca_series.spec`; o `build_all.ps1` não o recompila). Faz o papel do analisador numa ponta de um par virtual (com0com, ex.: `COM7 <-> COM8`), com o `ca_series` escutando na outra:
 
 ```powershell
 python ca_series\COM_simulator.py                                   # menu interativo
