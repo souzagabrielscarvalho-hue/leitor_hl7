@@ -92,33 +92,15 @@ TEST_TO_EXAM_CODE = {
 
 
 # ═══════════════════════════════════════════════════════════
-# NOME URIT → NOME ACEITO PELO LAB-APOIO
+# NOME DO ITEM NO PAYLOAD
 # ═══════════════════════════════════════════════════════════
-# O lab-apoio ainda não tem rota do CA Series: os resultados vão para a rota
-# do VIDAS 1600 (/api/integration/vidas1600), cujo serviço
-# (ReadBloodCountMachineVidas1600) só reconhece os nomes do VIDAS. Por isso o
-# payload usa o nome do VIDAS quando há equivalente (ALB → Alb → atributo
-# ALB). Itens sem equivalente vão com o nome da URIT; o lab-apoio os registra
-# como não mapeados e não grava.
-
-URIT_PARA_VIDAS = {
-    'ALT': 'TGP', 'GPT': 'TGP', 'AST': 'TGO', 'GOT': 'TGO',
-    'TB': 'Bili T', 'TBIL': 'Bili T', 'DB': 'Bili D', 'DBIL': 'Bili D',
-    'ALP': 'Falc', 'GGT': 'GGT', 'ALB': 'Alb', 'TP': 'PT', 'CHE': 'COLIN',
-    'UREA': 'Ureia', 'BUN': 'Ureia', 'CREA': 'Crea', 'CRE': 'Crea', 'UA': 'AUR',
-    'GLU': 'Gli', 'HBA1C': 'HbA1c', 'FRU': 'FRU',
-    'TC': 'Col', 'CHOL': 'Col', 'TG': 'Trig', 'HDL': 'HDL', 'HDL-C': 'HDL',
-    'CL': 'CL', 'CA': 'Ca', 'P': 'FOSF', 'PHOS': 'FOSF', 'MG': 'MG',
-    'CK': 'CKNAC', 'CK-MB': 'CKMB', 'CKMB': 'CKMB', 'LDH': 'LDH',
-    'CRP': 'PCR', 'HS-CRP': 'PCRu', 'HSCRP': 'PCRu',
-    'AMY': 'Ami', 'LPS': 'LIP', 'LIP': 'LIP',
-    'FE': 'Fe', 'FER': 'FERRI',
-    'ASO': 'ASO', 'RF': 'FR', 'LAC': 'LAC', 'UPRO': 'PTUR',
-}
-
+# O lab-apoio tem rota própria do CA Series (/api/integration/ca-series,
+# ReadBloodCountMachineCaSeries), que conhece os nomes da URIT e os converte
+# para os atributos internos. O payload leva o nome do item como o analisador
+# envia (OBX.4), só normalizado para maiúsculas.
 
 def nome_para_webhook(nome_urit: str) -> str:
-    return URIT_PARA_VIDAS.get(nome_urit.strip().upper(), nome_urit.strip())
+    return nome_urit.strip().upper()
 
 
 # ═══════════════════════════════════════════════════════════
@@ -495,8 +477,7 @@ if __name__ == "__main__":
             'baud_rate': 9600,
             'franchise_credential_id': '',
             'webhook_url': (
-                # Rota do VIDAS 1600 até existir a do CA Series (ver URIT_PARA_VIDAS)
-                'https://apoio.internal.vidaexame.com/api/integration/vidas1600'
+                'https://apoio.internal.vidaexame.com/api/integration/ca-series'
                 '?franchise_credential_id={franchise_credential_id}'
             ),
         },

@@ -192,7 +192,7 @@ Implementado a partir do *CA Series Automatic Chemistry Analyzer HL7 Interface D
 - Etiqueta: **OBR.2** (código de barras); sem ele, usa **OBR.3** (Sample ID).
 - Resultado: **OBX.4** = nome do item, **OBX.5** = valor, **OBX.8** = flag (quando não for `N`, vai junto do valor, ex.: `62H`). A absorbância (OBX.13) não é enviada.
 - O item é agrupado em `HEP`, `REN`, `GLI`, `LIP`, `ELE`, `CARD`, `AML`, `FER` ou `OUT` pela tabela `TEST_TO_EXAM_CODE` de `ca_series.py` (sem diferenciar maiúsculas); item fora da tabela vai para `QUIM`. Os nomes vêm do cadastro de itens do analisador: confira-os no equipamento e ajuste a tabela se preciso.
-- Webhook: enquanto o lab-apoio não tiver rota própria do CA Series, os resultados vão para a rota do VIDAS 1600 (`/api/integration/vidas1600`). Por isso o payload usa o nome do VIDAS quando há equivalente (`URIT_PARA_VIDAS` em `ca_series.py`: `ALB`→`Alb`, `ALT`→`TGP`, `GLU`→`Gli`...); itens sem equivalente (ex.: `GLB`, `A/G`, `IBIL`) vão com o nome da URIT e o lab-apoio não os grava. No log de integração do lab-apoio os envios aparecem como VIDAS1600.
+- Webhook: rota própria do lab-apoio, `/api/integration/ca-series` (`ReadBloodCountMachineCaSeries`). O payload leva o nome do item como o analisador envia (OBX.4, em maiúsculas: `ALB`, `ALT`, `GLU`...); o lab-apoio converte para os atributos internos e, se a etiqueta tiver o exame do analito em vez do painel (ex.: `ALBU`), grava no atributo único desse exame. No log de integração os envios aparecem como URIT CA Series.
 
 ### Simulador (`ca_series/COM_simulator.py`)
 
