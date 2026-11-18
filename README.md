@@ -10,7 +10,6 @@ Sistema de integração para leitura de dados de analisadores laboratoriais via 
 | **Coagmaster** (Teco) | `Coagmaster/` | Log proprietário via serial | COM4 |
 | **MEK7300** (Nihon Kohden) | `mek7300/` | Texto proprietário via serial | COM4 |
 | **VIDAS 1600** (bioMérieux) | `vidas1600/` | HL7 via serial | COM5 |
-| **CA Series** (URIT, bioquímica) | `ca_series/` | HL7 v2.3.1 via serial | COM6 |
 
 > ⚠️ **Importante:** A porta COM de cada analisador **depende de onde o cabo serial/USB foi conectado fisicamente ao PC**. As portas listadas acima são os valores padrão definidos no código-fonte. Para alterar a porta COM de um analisador, edite a variável `COM_PORT` no arquivo `.py` correspondente **antes** de gerar o executável com PyInstaller. No Windows, você pode verificar quais portas COM estão em uso pelo Gerenciador de Dispositivos (Painel de Controle → Gerenciador de Dispositivos → Portas (COM e LPT)).
 
@@ -35,10 +34,6 @@ leitor_hl7/
 │   └── mek7300.spec           # Config de build PyInstaller
 ├── vidas1600/                 # Código fonte — Analisador VIDAS 1600 (imunoensaio)
 │   └── vidas1600.py           # Código principal
-├── ca_series/                 # Código fonte — Analisador URIT CA Series (bioquímica)
-│   ├── ca_series.py           # Código principal
-│   ├── ca_series.spec         # Config de build PyInstaller
-│   └── COM_simulator.py       # Simulador do analisador (paciente, CQ, consulta)
 ├── shared/                    # Módulos compartilhados entre analisadores
 │   ├── __init__.py
 │   ├── base_analisador.py     # Serial, envio ao webhook e queda da COM
@@ -71,7 +66,7 @@ leitor_hl7/
 ## Funcionamento
 
 1. O serviço lê dados da porta serial do equipamento
-2. Faz o parsing da mensagem (HL7 para BH5100, VIDAS 1600 e CA Series, formato proprietário para Coagmaster e MEK7300)
+2. Faz o parsing da mensagem (HL7 para BH5100 e VIDAS 1600, formato proprietário para Coagmaster e MEK7300)
 3. Extrai resultados de exames e imagens (quando disponíveis)
 4. Salva arquivos na pasta `gerados/` na Área de Trabalho
 5. Uma thread em background envia os dados para o webhook
@@ -120,7 +115,7 @@ Para rotacionar um token de grupo, atualize o `config_bh5100.json` de **todos** 
 
 Não existe token global no `.env` do lab-apoio: o token é sempre o do grupo `tipo + unidade` (ou por PC com `--force`), configurado no `config_bh5100.json`.
 
-**Coagmaster, MEK7300, PKL, VIDAS 1600 e CA Series não enviam imagens e funcionam sem token:** o lab-apoio só exige o token nas rotas `/api/integration/images/*`, e os `config_*.json` dessas máquinas não têm as chaves `exam_images_*`.
+**Coagmaster, MEK7300, PKL e VIDAS 1600 não enviam imagens e funcionam sem token:** o lab-apoio só exige o token nas rotas `/api/integration/images/*`, e os `config_*.json` dessas máquinas não têm as chaves `exam_images_*`.
 
 Para um tipo novo (`vidas1600`, `mek7300`, ...), acrescente o tipo em `config/exam_images.php` → `machines` e crie o token do grupo com `--machine=vidas1600` (ou `mek7300`). Hoje só o BH5100 tem o código de envio de imagens. A máquina passa a ter as chaves de imagem no config ao declarar `exam_images_url` e `exam_images_machine_token` nos seus `config_defaults`.
 
@@ -178,42 +173,9 @@ envio_com.exe --list-ports
 
 > A mensagem de referência já contém 31 resultados e 4 imagens úteis (WBC, RBC, PLT e WBC90). Se a etiqueta já tiver imagens de um teste anterior, um novo envio cria outro conjunto de `procedure_images` para os mesmos códigos; use uma etiqueta ainda sem imagens no primeiro teste.
 
-## CA Series (URIT)
-
-Implementado a partir do *CA Series Automatic Chemistry Analyzer HL7 Interface Development Reference Manual* V1.01 (2023.03). HL7 v2.3.1 em MLLP (`0x0B ... 0x1C 0x0D`); no manual o analisador é o "cliente" e o LIS, o "servidor".
-
-| Analisador envia | `ca_series.exe` responde | O que acontece |
-|---|---|---|
-| `ORU^R01` com MSH.16 = `0` (paciente) | `ACK^R01` | salvo em `gerados/` e enviado ao webhook, um payload por ExamCode |
-| `ORU^R01` com MSH.16 = `2` (CQ) | `ACK^R01` | guardado em `enviados/qc/`, **não** vai ao webhook |
-| `QRY^Q02` (consulta da amostra) | `QCK^Q02` com `QAK\|SR\|NF` | só registra no log: o LIS não envia ordens ao analisador |
-| `ACK^Q03` | — | só registra no log |
-
-- Etiqueta: **OBR.2** (código de barras); sem ele, usa **OBR.3** (Sample ID).
-- Resultado: **OBX.4** = nome do item, **OBX.5** = valor, **OBX.8** = flag (quando não for `N`, vai junto do valor, ex.: `62H`). A absorbância (OBX.13) não é enviada.
-- O item é agrupado em `HEP`, `REN`, `GLI`, `LIP`, `ELE`, `CARD`, `AML`, `FER` ou `OUT` pela tabela `TEST_TO_EXAM_CODE` de `ca_series.py` (sem diferenciar maiúsculas); item fora da tabela vai para `QUIM`. Os nomes vêm do cadastro de itens do analisador: confira-os no equipamento e ajuste a tabela se preciso.
-- Webhook: rota própria do lab-apoio, `/api/integration/ca-series` (`ReadBloodCountMachineCaSeries`). O payload leva o nome do item como o analisador envia (OBX.4, em maiúsculas: `ALB`, `ALT`, `GLU`...); o lab-apoio converte para os atributos internos e, se a etiqueta tiver o exame do analito em vez do painel (ex.: `ALBU`), grava no atributo único desse exame. No log de integração os envios aparecem como URIT CA Series.
-
-### Simulador (`ca_series/COM_simulator.py`)
-
-Também compilado como `build/ca_series/simulador_ca_series.exe` (console, spec em `ca_series/simulador_ca_series.spec`; o `build_all.ps1` não o recompila). Faz o papel do analisador numa ponta de um par virtual (com0com, ex.: `COM7 <-> COM8`), com o `ca_series` escutando na outra:
-
-```powershell
-python ca_series\COM_simulator.py                                   # menu interativo
-python ca_series\COM_simulator.py --port COM8 --etiqueta 151020262929  # resultado de paciente
-python ca_series\COM_simulator.py --modo qc --port COM8               # resultado de CQ
-python ca_series\COM_simulator.py --modo consulta --port COM8 --etiqueta 151020262929
-python ca_series\COM_simulator.py --dry-run                           # só mostra a mensagem
-python ca_series\COM_simulator.py --list-ports
-```
-
-Configuração em `config_simulador_ca_series.json`, ao lado do `.exe` (modelo em `build/ca_series/`; se faltar, o `.exe` cria um com os valores padrão): `port` (a outra ponta do par, padrão `COM8`), `baud_rate`, `etiqueta` padrão, `timeout`, `modo` (`paciente`, `qc`, `consulta` ou vazio para perguntar), `rack`/`tubo` e a lista `itens` do resultado de paciente (`nome`, `valor`, `unidade`, `referencia`, `flag`, `absorbancia`). A linha de comando tem prioridade sobre o JSON. O `.exe` espera um Enter antes de fechar (`"pausar_ao_final": false` ou `--sem-pausa` desligam).
-
-Ele envia a mensagem, espera a resposta (padrão 10s, `--timeout`), confere o tipo, o `MSA|AA` e se o MSA.2 bate com o MSH.10 enviado, e sai com código 0 em sucesso. Na consulta, se o LIS responder `QAK|SR|OK`, espera o `DSR^Q03` e devolve o `ACK^Q03`.
-
 ## Queda da conexão COM
 
-Vale para `bh5100`, `ca_series`, `coagmaster`, `mek7300`, `pkl` e `vidas1600`. O envio de resultados e imagens roda em uma thread separada da leitura serial, então continua com a COM caída.
+Vale para `bh5100`, `coagmaster`, `mek7300`, `pkl` e `vidas1600`. O envio de resultados e imagens roda em uma thread separada da leitura serial, então continua com a COM caída.
 
 1. Enquanto a porta está caída, o programa tenta reconectar e segue enviando o que estiver em `gerados/`. Se a porta voltar em até 5 minutos, nada muda para o usuário.
 2. Depois de 5 minutos sem conexão, ele encerra assim que `gerados/` esvaziar.
@@ -233,7 +195,7 @@ powershell -ExecutionPolicy Bypass -File .\build_all.ps1
 O comando compila o código que está na branch atual do clone: confira a branch e o commit que ele mostra no início.
 
 - **Antes de compilar:** instala o que faltar de `requirements.txt` no `venv` e confere se cada analisador importa. Falha aqui interrompe o build.
-- **Executáveis:** `bh5100`, `ca_series`, `coagmaster`, `mek7300`, `pkl`, `test_get_only` e `vidas1600`, em `build/<analisador>/`. O `test_get_only.exe` vai para `build/pkl/`.
+- **Executáveis:** `bh5100`, `coagmaster`, `mek7300`, `pkl`, `test_get_only` e `vidas1600`, em `build/<analisador>/`. O `test_get_only.exe` vai para `build/pkl/`.
 - **`envio_com`:** compilado se existir `..\read\envio_com.spec`, copiado para `build/bh5100/`. Sem essa pasta aparece como `PULADO`, sem falhar o build. Não é versionado.
 - **Resultado:** o script mostra uma tabela `OK`/`ERRO`/`PULADO`, grava a saída de cada executável em `build_logs/<nome>.log` e, com qualquer `ERRO`, sai com código 1 sem commitar.
 - **Commit:** feito só com todos os executáveis OK, e cancelado se houver token preenchido em arquivo versionado. Use `-SkipGit` para só compilar.
@@ -266,7 +228,6 @@ Os analisadores criam as seguintes pastas na Área de Trabalho do usuário:
 - `Área de Trabalho/AnalisadorCoagmaster/` — gerados, enviados, requisições não enviadas, log
 - `Área de Trabalho/AnalisadorMEK7300/` — gerados, enviados, requisições não enviadas, log
 - `Área de Trabalho/AnalisadorVIDAS1600/` — gerados, enviados, log
-- `Área de Trabalho/AnalisadorCASeries/` — gerados, enviados (com `qc/`), requisições não enviadas, log
 
 ## Requisitos
 

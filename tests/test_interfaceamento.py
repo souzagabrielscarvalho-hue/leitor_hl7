@@ -26,7 +26,6 @@ sys.path.insert(0, RAIZ)
 
 from Coagmaster.coagmaster import AnalisadorCoagmaster
 from bh5100.bh5100 import AnalisadorBH5100
-from ca_series.ca_series import AnalisadorCASeries
 from mek7300.mek7300 import AnalisadorMEK7300
 from pkl.pkl import AnalisadorPKL125
 from shared import base_analisador
@@ -64,12 +63,6 @@ HL7_VIDAS = "\x0b" + "\r".join([
     "OBX|1|NM|Gli||90|mg/dL||N",
 ]) + "\r\x1c\r"
 
-HL7_CA_SERIES = "\x0b" + "\r".join([
-    "MSH|^~\\&|URIT|CA-XXX|||20261105||ORU^R01|202611050001|p|2.3.1||||0||ANSI|||",
-    "OBR|1|151020262929|202611050001|URIT^CA-XXX|0||2026/11/05|",
-    "OBX|1|NM|0|ALB|42.3|g/L|35.0-55.0|N|||F||0.4512|2026/11/05||Server||",
-]) + "\r\x1c\r"
-
 TXT_MEK = "FileName: 151020262929\r\nWBC: 5.800\r\n"
 JSON_COAG = json.dumps({"FileName": "151020262929", "ExamCode": "TAP"})
 JSON_PKL = json.dumps({
@@ -88,7 +81,6 @@ MAQUINAS = {
     ),
     "coagmaster": (AnalisadorCoagmaster, "Coagmaster", {}, "exame.txt", JSON_COAG, {}),
     "vidas1600": (AnalisadorVIDAS1600, "VIDAS1600", {}, "exame.hl7", HL7_VIDAS, {}),
-    "ca_series": (AnalisadorCASeries, "CASeries", {}, "exame.hl7", HL7_CA_SERIES, {}),
     "pkl": (
         AnalisadorPKL125, "PKL125", {"use_serial_listener": True},
         "exame.astm", JSON_PKL, {"pkl_machine_id": ""},
@@ -442,9 +434,6 @@ class TestQuedaCOM(BaseTeste):
 
     def test_queda_vidas1600(self) -> None:
         self._verificar_queda("vidas1600")
-
-    def test_queda_ca_series(self) -> None:
-        self._verificar_queda("ca_series")
 
     def test_queda_mek7300(self) -> None:
         self._verificar_queda("mek7300")

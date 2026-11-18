@@ -26,7 +26,6 @@ $PadraoToken = 'exam_images_machine_token.{1,6}[A-Za-z0-9]{20,}'
 # Nome da pasta do spec, nome do spec e nome do exe.
 $Maquinas = @(
     @{ Nome = "bh5100";     SpecDir = "bh5100" },
-    @{ Nome = "ca_series";  SpecDir = "ca_series" },
     @{ Nome = "coagmaster"; SpecDir = "Coagmaster" },
     @{ Nome = "mek7300";    SpecDir = "mek7300" },
     @{ Nome = "pkl";        SpecDir = "pkl" },
