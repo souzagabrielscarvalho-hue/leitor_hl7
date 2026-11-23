@@ -7,6 +7,7 @@ Sistema de integração para leitura de dados de analisadores laboratoriais via 
 | Analisador | Pasta | Protocolo | Porta Padrão |
 |---|---|---|---|
 | **BH5100** (Mindray) | `bh5100/` | HL7 via serial | COM3 |
+| **CA-150** (URIT) | `ca150/` | HL7 via serial ou TCP/IP, com consulta por etiqueta | COM6 / TCP 5100 |
 | **Coagmaster** (Teco) | `Coagmaster/` | Log proprietário via serial | COM4 |
 | **MEK7300** (Nihon Kohden) | `mek7300/` | Texto proprietário via serial | COM4 |
 | **VIDAS 1600** (bioMérieux) | `vidas1600/` | HL7 via serial | COM5 |
@@ -24,6 +25,9 @@ leitor_hl7/
 │   ├── makeimage.py           # Geração de imagens
 │   ├── makerpdf.py            # Geração de PDFs
 │   └── COM_simulator.py       # Simulador HL7 para testes
+├── ca150/                     # Código fonte — Analisador URIT CA-150 (bioquímica)
+│   ├── ca150.py               # Código principal (serial ou TCP, consulta por etiqueta)
+│   └── ca150.spec             # Config de build PyInstaller
 ├── Coagmaster/                # Código fonte — Analisador Coagmaster (coagulação)
 │   ├── coagmaster.py          # Código principal
 │   ├── coagmaster.spec        # Config de build PyInstaller
@@ -173,9 +177,34 @@ envio_com.exe --list-ports
 
 > A mensagem de referência já contém 31 resultados e 4 imagens úteis (WBC, RBC, PLT e WBC90). Se a etiqueta já tiver imagens de um teste anterior, um novo envio cria outro conjunto de `procedure_images` para os mesmos códigos; use uma etiqueta ainda sem imagens no primeiro teste.
 
+## URIT CA-150 (interfaceamento por etiqueta)
+
+Segue o manual *CA Series Automatic Chemistry Analyzer HL7 Interface Development Reference Manual* V1.01. A máquina é o cliente e o `ca150.exe` é o servidor:
+
+- **Consulta:** a máquina lê o tubo e manda `QRY^Q02` (etiqueta em `QRD.8`). O programa consulta o lab-apoio em `GET /api/interfacing/tag` e responde `QCK^Q02` e, cerca de 1 s depois, `DSR^Q03` com o paciente e os itens (os `attribute_code` dos atributos de origem INTERFACE). Etiqueta inexistente ou sem item por interface: só `QCK^Q02` com `QAK|SR|NF|`. Lab-apoio fora do ar: `QAK|SR|AE|`.
+- **Resultado:** `ORU^R01` recebe `ACK^R01` na hora, vai para `gerados/` e é enviado a `POST /api/integration/ca-150` como `{"tag_id", "results": [{"code", "value", "unit"}]}`. Controle de qualidade (`MSH.16 = 2`) recebe ACK, mas não é enviado. Itens calculados com valor `10000000` são descartados.
+- **Códigos:** o código do item configurado na CA-150 precisa ser igual ao `attribute_code` no sistema.
+
+O `config_ca150.json` escolhe a conexão:
+
+```json
+{
+    "modo": "serial",          // "serial" (com_port, baud_rate) ou "tcp"
+    "com_port": "COM6",
+    "baud_rate": 9600,
+    "tcp_host": "0.0.0.0",     // no modo tcp: a máquina conecta no IP do PC
+    "tcp_port": 5100,          //   e nesta porta (liberar no Firewall do Windows)
+    "franchise_credential_id": "<franchise_id da unidade>",
+    "webhook_url": ".../api/integration/ca-150?franchise_credential_id={franchise_credential_id}",
+    "consult_url": ".../api/interfacing/tag?franchise_credential_id={franchise_credential_id}"
+}
+```
+
+No modo TCP, uma conexão nova da máquina substitui a anterior e o programa não encerra quando a máquina desconecta. Health check em `http://localhost:8085/health`.
+
 ## Queda da conexão COM
 
-Vale para `bh5100`, `coagmaster`, `mek7300`, `pkl` e `vidas1600`. O envio de resultados e imagens roda em uma thread separada da leitura serial, então continua com a COM caída.
+Vale para `bh5100`, `ca150` (modo serial), `coagmaster`, `mek7300`, `pkl` e `vidas1600`. O envio de resultados e imagens roda em uma thread separada da leitura serial, então continua com a COM caída.
 
 1. Enquanto a porta está caída, o programa tenta reconectar e segue enviando o que estiver em `gerados/`. Se a porta voltar em até 5 minutos, nada muda para o usuário.
 2. Depois de 5 minutos sem conexão, ele encerra assim que `gerados/` esvaziar.
@@ -195,7 +224,7 @@ powershell -ExecutionPolicy Bypass -File .\build_all.ps1
 O comando compila o código que está na branch atual do clone: confira a branch e o commit que ele mostra no início.
 
 - **Antes de compilar:** instala o que faltar de `requirements.txt` no `venv` e confere se cada analisador importa. Falha aqui interrompe o build.
-- **Executáveis:** `bh5100`, `coagmaster`, `mek7300`, `pkl`, `test_get_only` e `vidas1600`, em `build/<analisador>/`. O `test_get_only.exe` vai para `build/pkl/`.
+- **Executáveis:** `bh5100`, `ca150`, `coagmaster`, `mek7300`, `pkl`, `test_get_only` e `vidas1600`, em `build/<analisador>/`. O `test_get_only.exe` vai para `build/pkl/`.
 - **`envio_com`:** compilado se existir `..\read\envio_com.spec`, copiado para `build/bh5100/`. Sem essa pasta aparece como `PULADO`, sem falhar o build. Não é versionado.
 - **Resultado:** o script mostra uma tabela `OK`/`ERRO`/`PULADO`, grava a saída de cada executável em `build_logs/<nome>.log` e, com qualquer `ERRO`, sai com código 1 sem commitar.
 - **Commit:** feito só com todos os executáveis OK, e cancelado se houver token preenchido em arquivo versionado. Use `-SkipGit` para só compilar.
@@ -212,6 +241,29 @@ powershell -ExecutionPolicy Bypass -File .\enviar.ps1 pessoal
 
 O `build/bh5100/config_bh5100.json` tem o token da máquina e não é versionado. Em um PC novo, crie-o a partir de `config_bh5100.example.json`.
 
+## Testes no ambiente local
+
+**Sempre teste no lab-apoio local antes de usar produção.** Ele roda no Docker, na porta `8039`, e o PC Windows o alcança por `http://localhost:8039`. No `config_*.json` ao lado do `.exe` de teste, troque o host do `webhook_url` (e, na CA-150, do `consult_url`) por `http://localhost:8039`, mantendo a rota da máquina:
+
+| Máquina | `webhook_url` local |
+|---|---|
+| BH5100 | `http://localhost:8039/api/integration/bh5100?franchise_credential_id={franchise_credential_id}` |
+| CA-150 | `http://localhost:8039/api/integration/ca-150?franchise_credential_id={franchise_credential_id}` |
+| Coagmaster | `http://localhost:8039/api/integration/coagmaster?franchise_credential_id={franchise_credential_id}` |
+| MEK7300 | `http://localhost:8039/api/integration/mek7300/v2?franchise_credential_id={franchise_credential_id}` |
+| VIDAS 1600 | `http://localhost:8039/api/integration/vidas1600?franchise_credential_id={franchise_credential_id}` |
+
+Na CA-150, a consulta por etiqueta também vai para o local:
+`"consult_url": "http://localhost:8039/api/interfacing/tag?franchise_credential_id={franchise_credential_id}"`.
+
+Cada máquina tem a sua rota: a BH5100 grava hemograma, e mandar outra máquina para `/integration/bh5100` não grava os resultados. O `franchise_credential_id` precisa ser o `franchise_id` de uma unidade cadastrada no banco local. Os configs versionados em `build/` continuam apontando para produção (`https://apoio.internal.vidaexame.com`).
+
+Para conferir se o Windows alcança o lab-apoio local:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing "http://localhost:8039/api/interfacing/tag?franchise_credential_id=<franchise_id>&tag_id=<etiqueta>"
+```
+
 ## Testes
 
 ```powershell
@@ -225,6 +277,7 @@ python -m unittest discover -s tests -v
 Os analisadores criam as seguintes pastas na Área de Trabalho do usuário:
 
 - `Área de Trabalho/AnalisadorBH5100/` — gerados, enviados, requisições não enviadas, log
+- `Área de Trabalho/AnalisadorCA150/` — gerados, enviados, requisições não enviadas, log
 - `Área de Trabalho/AnalisadorCoagmaster/` — gerados, enviados, requisições não enviadas, log
 - `Área de Trabalho/AnalisadorMEK7300/` — gerados, enviados, requisições não enviadas, log
 - `Área de Trabalho/AnalisadorVIDAS1600/` — gerados, enviados, log

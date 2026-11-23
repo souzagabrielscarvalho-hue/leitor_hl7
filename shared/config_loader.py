@@ -19,8 +19,12 @@ import sys
 from typing import Any, Dict, Tuple
 
 # Só existem no config da máquina que as declara nos defaults: máquina sem
-# imagem não ganha chave de token, e só o PKL tem pkl_machine_id.
-CHAVES_OPCIONAIS = ("pkl_machine_id", "exam_images_url", "exam_images_machine_token")
+# imagem não ganha chave de token, só o PKL tem pkl_machine_id e só a CA-150
+# tem as chaves de TCP e da consulta por etiqueta.
+CHAVES_OPCIONAIS = (
+    "pkl_machine_id", "exam_images_url", "exam_images_machine_token",
+    "modo", "tcp_host", "tcp_port", "consult_url",
+)
 
 
 def _get_app_dir(analisador_nome: str) -> str:

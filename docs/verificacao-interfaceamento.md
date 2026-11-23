@@ -25,6 +25,7 @@ No computador conectado à máquina, abra o **Gerenciador de Tarefas** (`Ctrl+Sh
 | Analisador | Processo (.exe) | Porta Health Check |
 |---|---|---|
 | **BH5100** | `bh5100.exe` | `http://localhost:8080/health` |
+| **CA-150** | `ca150.exe` | `http://localhost:8085/health` |
 | **Coagmaster** | `coagmaster.exe` | `http://localhost:8081/health` |
 | **MEK7300** | `mek7300.exe` | `http://localhost:8082/health` |
 | **PKL125** | `pkl.exe` | `http://localhost:8083/health` |
@@ -114,6 +115,7 @@ O arquivo `config_<máquina>.json` contém a configuração da porta serial. Exe
 | Analisador | Porta COM Padrão | Baud Rate |
 |---|---|---|
 | **BH5100** | COM3 | 9600 |
+| **CA-150** | COM6 (ou TCP 5100, conforme `modo` no config) | 9600 |
 | **Coagmaster** | COM4 | 115200 |
 | **MEK7300** | COM5 | 9600 |
 | **PKL125** | COM3 | 19200 |

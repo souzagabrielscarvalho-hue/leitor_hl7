@@ -496,6 +496,8 @@ class BaseAnalisador:
 
     def _setup_config(self, defaults: Dict[str, Any]) -> None:
         _config, _config_status = load_config(self.machine_id, defaults)
+        # Config completo, para as chaves que só uma máquina usa.
+        self.CONFIG = _config
         self.COM_PORT = _config["com_port"]
         self.BAUD_RATE = _config["baud_rate"]
         self.FRANCHISE_CREDENTIAL_ID = _config.get("franchise_credential_id", "")
