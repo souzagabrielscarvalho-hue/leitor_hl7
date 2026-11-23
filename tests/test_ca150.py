@@ -96,6 +96,8 @@ class ServidorFalso:
         self.requisicoes = []
         self.status_consulta = 200
         self.corpo_consulta = CONSULTA_OK
+        self.status_post = 200
+        self.corpo_post = {"message": "ok", "data": {"saved": [1]}}
         dono = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -117,7 +119,7 @@ class ServidorFalso:
             def do_POST(self):
                 corpo = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 dono.requisicoes.append({"metodo": "POST", "caminho": self.path, "corpo": json.loads(corpo)})
-                self._responder(200, {"message": "ok", "data": {"saved": [1]}})
+                self._responder(dono.status_post, dono.corpo_post)
 
         self._http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self._http.daemon_threads = True
@@ -294,6 +296,106 @@ class TestConsulta(BaseCA150):
         analisador._responder_consulta(QRY)
 
         self.assertIn("QAK|SR|AE|", quadros(porta.escrito)[0])
+
+
+ACK_Q03 = quadro(
+    "MSH|^~\\&|URIT|CA-XXX|||20210701110316||ACK^Q03|20210701110314|p|2.3.1||||0||ANSI|||",
+    "MSA|AA|20210701110314|Message accepted|||0|",
+)
+
+
+class TestLog(BaseCA150):
+    """Cada etapa, com sucesso ou falha, deixa uma linha no analisador_ca150.log."""
+
+    def _log(self) -> str:
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+        with open(self.analisador.LOG_FILE, encoding="utf-8") as arquivo:
+            return arquivo.read()
+
+    def test_consulta_com_sucesso_registra_cada_etapa(self) -> None:
+        self.analisador, _ = self.criar_serial()
+
+        self.analisador._responder_consulta(QRY)
+        self.analisador._on_serial_message(ACK_Q03)
+
+        log = self._log()
+        self.assertIn("Consulta da máquina para a etiqueta Barcode001.", log)
+        self.assertIn("✓ Etiqueta Barcode001 encontrada: exames HEP, REN; itens por interface: ALB, ALT, CRE.", log)
+        self.assertIn("✓ Etiqueta Barcode001: enviados 3 item(ns) à máquina: ALB, ALT, CRE.", log)
+        self.assertIn("✓ Máquina confirmou a mensagem 20210701110314 (ACK^Q03, AA).", log)
+
+    def test_consulta_sem_exames_de_interface_registra_o_motivo(self) -> None:
+        self.analisador, _ = self.criar_serial()
+        self.servidor.corpo_consulta = {"message": "", "data": {"tag_id": "Barcode001", "patient": {}, "exams": []}}
+
+        self.analisador._responder_consulta(QRY)
+
+        log = self._log()
+        self.assertIn("Etiqueta Barcode001 encontrada, mas sem exames pendentes por interfaceamento", log)
+        self.assertIn("Etiqueta Barcode001: respondido QAK|SR|NF (máquina não recebe exames).", log)
+
+    def test_resposta_que_nao_chega_na_maquina_e_registrada(self) -> None:
+        self.analisador, porta = self.criar_serial()
+        porta.is_open = False
+
+        self.analisador._responder_consulta(QRY)
+
+        log = self._log()
+        self.assertIn("✗ Porta serial fechada: resposta descartada.", log)
+        self.assertIn("✗ Etiqueta Barcode001: QAK|SR|OK não chegou à máquina.", log)
+        self.assertNotIn("enviados 3 item(ns)", log)
+
+    def test_maquina_recusando_a_lista_de_exames_e_registrada(self) -> None:
+        self.analisador, _ = self.criar_serial()
+
+        self.analisador._on_serial_message(ACK_Q03.replace("MSA|AA|", "MSA|AE|"))
+
+        self.assertIn("✗ Máquina recusou a mensagem 20210701110314 (ACK^Q03, AE)", self._log())
+
+    def test_resultado_recebido_e_ack_sao_registrados(self) -> None:
+        self.analisador, _ = self.criar_serial()
+
+        self.analisador._on_serial_message(ORU_PACIENTE)
+
+        log = self._log()
+        self.assertIn("Resultado recebido da máquina: etiqueta Barcode001, itens: ALB=0.0 g/L", log)
+        self.assertIn("✓ ACK^R01 enviado à máquina.", log)
+
+    def test_envio_registra_o_que_foi_gravado_e_o_que_ficou_de_fora(self) -> None:
+        self.analisador = self.criar()
+        self.servidor.corpo_post = {"message": "ok", "data": {
+            "tag_id": "Barcode001",
+            "saved": [{"exam_code": "HDL", "code": "HDL", "value": "45"}],
+            "ignored": ["GLI"],
+        }}
+
+        payload = {"tag_id": "Barcode001", "results": [{"code": "HDL", "value": "45", "unit": "mg/dL"}]}
+        self.assertTrue(self.analisador._enviar_payload_webhook(payload, "exame.hl7", "Barcode001"))
+
+        log = self._log()
+        self.assertIn("✓ Gravado no laudo: etiqueta Barcode001, exame HDL, HDL=45.", log)
+        self.assertIn("Itens da etiqueta Barcode001 NÃO gravados: GLI.", log)
+
+    def test_envio_recusado_registra_a_mensagem_do_lab_apoio(self) -> None:
+        self.analisador = self.criar()
+        self.servidor.status_post = 400
+        self.servidor.corpo_post = {"message": "HDL: procedimento já liberado", "data": None}
+
+        payload = {"tag_id": "Barcode001", "results": [{"code": "HDL", "value": "45", "unit": ""}]}
+        self.assertFalse(self.analisador._enviar_payload_webhook(payload, "exame.hl7", "Barcode001"))
+
+        self.assertIn("✗ lab-apoio respondeu 400 para a etiqueta Barcode001: HDL: procedimento já liberado", self._log())
+
+    def test_erro_inesperado_vai_para_o_log(self) -> None:
+        self.analisador, _ = self.criar_serial()
+
+        with mock.patch.object(ca150, "gerar_dsr", side_effect=RuntimeError("quebrou")):
+            self.analisador._responder_consulta(QRY)
+
+        log = self._log()
+        self.assertIn("✗ Erro inesperado ao responder a consulta da etiqueta Barcode001.", log)
+        self.assertIn("RuntimeError: quebrou", log)
 
 
 class TestTCP(BaseCA150):

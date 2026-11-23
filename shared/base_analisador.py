@@ -661,6 +661,11 @@ class BaseAnalisador:
                     timeout=30,
                 )
                 self._last_webhook_status = resp.status_code
+                try:
+                    self._on_webhook_response(resp, nome_arquivo, tag_identifier)
+                except Exception as e:
+                    # Só log: falha aqui não pode impedir o envio.
+                    logging.warning(f"Erro ao registrar a resposta do webhook: {type(e).__name__}: {e}")
 
                 if resp.status_code in (200, 201):
                     recusa = _recusa_em_resposta_ok(resp)
@@ -1286,5 +1291,13 @@ class BaseAnalisador:
         """
         Gera ACK para uma mensagem recebida.
         Retorna bytes do ACK ou None se o protocolo não usa ACK.
+        """
+        return None
+
+    def _on_webhook_response(self, resp: Any, nome_arquivo: str, tag_identifier: str) -> None:
+        """
+        Chamado a cada resposta HTTP do webhook, antes de decidir o sucesso.
+        Serve para a máquina registrar no log detalhes da resposta (ex.: o que
+        foi gravado). Não muda o envio. Por padrão não faz nada.
         """
         return None

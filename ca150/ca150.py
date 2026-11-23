@@ -254,6 +254,18 @@ def parse_resultado(mensagem: str) -> Dict[str, Any]:
     return {"tag_id": tag_id, "results": resultados}
 
 
+def resumo_dos_itens(mensagem: str) -> List[str]:
+    """Itens do ORU para o log, ex.: ["HDL=45 mg/dL", "GLI=98"]."""
+    itens = []
+    for seg in segmentos(mensagem):
+        if seg.startswith("OBX|"):
+            campos = seg.split("|")
+            codigo = campo(campos, 4) or campo(campos, 3)
+            unidade = campo(campos, 6)
+            itens.append(f"{codigo}={campo(campos, 5)}" + (f" {unidade}" if unidade else ""))
+    return itens
+
+
 # ═══════════════════════════════════════════════════════════
 # CLASSE DO ANALISADOR
 # ═══════════════════════════════════════════════════════════
@@ -278,6 +290,9 @@ class AnalisadorCA150(BaseAnalisador):
         self._conexao: Optional[socket.socket] = None
         self._servidor_tcp: Optional[socket.socket] = None
 
+        if not self.CONSULT_URL:
+            logging.error("✗ consult_url vazio no config: as consultas da máquina vão responder erro (AE).")
+
     # ── HOOKS DO BASEANALISADOR ───────────────────────────────
 
     def get_file_extension(self) -> str:
@@ -298,6 +313,13 @@ class AnalisadorCA150(BaseAnalisador):
         return gerar_ack_resultado(raw_message)
 
     def _on_serial_message(self, raw_message: str) -> None:
+        try:
+            self._tratar_mensagem(raw_message)
+        except Exception:
+            # No .exe não há console: sem isto o erro sumiria sem deixar rastro.
+            logging.exception(f"✗ Erro inesperado ao tratar mensagem da máquina: {raw_message[:200]!r}")
+
+    def _tratar_mensagem(self, raw_message: str) -> None:
         tipo = tipo_mensagem(raw_message)
 
         if tipo.startswith("QRY"):
@@ -310,14 +332,66 @@ class AnalisadorCA150(BaseAnalisador):
                 logging.info(f"Resultado de controle de qualidade (MSH.16={msh16}): só ACK, não enviado.")
                 self._send_ack(gerar_ack_resultado(raw_message))
                 return
+            etiqueta = campo(campos_do_segmento(raw_message, "OBR"), 2)
+            logging.info(
+                f"Resultado recebido da máquina: etiqueta {etiqueta or '(vazia)'}, "
+                f"itens: {', '.join(resumo_dos_itens(raw_message)) or '(nenhum)'}."
+            )
             # Grava em gerados/ e responde o ACK (generate_ack).
             super()._on_serial_message(raw_message)
             return
 
-        logging.debug(f"Mensagem {tipo or 'sem MSH'} recebida e ignorada.")
+        if tipo.startswith("ACK"):
+            msa = campos_do_segmento(raw_message, "MSA")
+            codigo, control_id = campo(msa, 1).upper(), campo(msa, 2)
+            if codigo in ("AA", "CA"):
+                logging.info(f"✓ Máquina confirmou a mensagem {control_id} ({tipo}, {codigo}).")
+            else:
+                logging.error(
+                    f"✗ Máquina recusou a mensagem {control_id} ({tipo}, {codigo or 'sem MSA'}): "
+                    f"{campo(msa, 3) or 'sem motivo informado'}."
+                )
+            return
+
+        logging.warning(f"Mensagem {tipo or 'sem MSH'} recebida e ignorada: {raw_message[:200]!r}")
 
     def _send_ack(self, ack_data: bytes) -> None:
-        self._escrever(ack_data)
+        if self._escrever(ack_data):
+            logging.info("✓ ACK^R01 enviado à máquina.")
+        else:
+            logging.error("✗ ACK^R01 não chegou à máquina: ela deve reenviar o resultado.")
+
+    def _on_webhook_response(self, resp: Any, nome_arquivo: str, tag_identifier: str) -> None:
+        """Registra o que o lab-apoio gravou e o que ficou de fora."""
+        try:
+            corpo = resp.json()
+        except ValueError:
+            corpo = None
+        mensagem = str(corpo.get("message") or "") if isinstance(corpo, dict) else resp.text[:300]
+        dados = corpo.get("data") if isinstance(corpo, dict) else None
+
+        if resp.status_code not in (200, 201):
+            logging.error(
+                f"✗ lab-apoio respondeu {resp.status_code} para a etiqueta {tag_identifier}: "
+                f"{mensagem or resp.text[:300]}"
+            )
+            return
+        if not isinstance(dados, dict):
+            return
+
+        for item in dados.get("saved") or []:
+            if isinstance(item, dict):
+                logging.info(
+                    f"✓ Gravado no laudo: etiqueta {tag_identifier}, exame {item.get('exam_code')}, "
+                    f"{item.get('code')}={item.get('value')}."
+                )
+        ignorados = dados.get("ignored") or []
+        if ignorados:
+            logging.warning(
+                f"Itens da etiqueta {tag_identifier} NÃO gravados: {', '.join(map(str, ignorados))}. "
+                f"Motivo provável: sem atributo com origem Interface na unidade, código diferente do "
+                f"atributo, ou procedimento já liberado."
+            )
 
     def process_file(self, filepath: str, nome_arquivo: str) -> Optional[List[Dict[str, Any]]]:
         try:
@@ -375,45 +449,65 @@ class AnalisadorCA150(BaseAnalisador):
             logging.error(f"✗ Consulta da etiqueta {etiqueta}: resposta sem JSON.")
             return "AE", None
 
-        if not itens_da_consulta(dados.get("exams") or []):
-            logging.warning(f"Etiqueta {etiqueta} sem exames pendentes por interfaceamento.")
+        itens = itens_da_consulta(dados.get("exams") or [])
+        if not itens:
+            logging.warning(
+                f"Etiqueta {etiqueta} encontrada, mas sem exames pendentes por interfaceamento "
+                f"(confira a origem Interface dos atributos na unidade)."
+            )
             return "NF", None
+        exames = [str(e.get("exam_code") or "?") for e in dados.get("exams") or []]
+        logging.info(
+            f"✓ Etiqueta {etiqueta} encontrada: exames {', '.join(exames)}; "
+            f"itens por interface: {', '.join(itens)}."
+        )
         return "OK", dados
 
     def _responder_consulta(self, mensagem: str) -> None:
         etiqueta = etiqueta_da_consulta(mensagem)
-        with self._lock_consulta:
-            logging.info(f"Consulta da máquina para a etiqueta {etiqueta or '(vazia)'}.")
-            status, dados = self.consultar_etiqueta(etiqueta)
-            self._escrever(gerar_qck(mensagem, status))
-            if status != "OK" or dados is None:
-                logging.info(f"Etiqueta {etiqueta}: respondido QAK|SR|{status}.")
-                return
-            time.sleep(INTERVALO_DSR)
-            self._escrever(gerar_dsr(mensagem, dados))
-            logging.info(
-                f"Etiqueta {etiqueta}: enviados {len(itens_da_consulta(dados.get('exams') or []))} item(ns) à máquina."
-            )
+        try:
+            with self._lock_consulta:
+                logging.info(f"Consulta da máquina para a etiqueta {etiqueta or '(vazia)'}.")
+                status, dados = self.consultar_etiqueta(etiqueta)
+                if not self._escrever(gerar_qck(mensagem, status)):
+                    logging.error(f"✗ Etiqueta {etiqueta}: QAK|SR|{status} não chegou à máquina.")
+                    return
+                if status != "OK" or dados is None:
+                    logging.info(f"Etiqueta {etiqueta}: respondido QAK|SR|{status} (máquina não recebe exames).")
+                    return
+                time.sleep(INTERVALO_DSR)
+                itens = itens_da_consulta(dados.get("exams") or [])
+                if self._escrever(gerar_dsr(mensagem, dados)):
+                    logging.info(
+                        f"✓ Etiqueta {etiqueta}: enviados {len(itens)} item(ns) à máquina: {', '.join(itens)}. "
+                        f"Aguardando a confirmação (ACK^Q03)."
+                    )
+                else:
+                    logging.error(f"✗ Etiqueta {etiqueta}: lista de exames (DSR) não chegou à máquina.")
+        except Exception:
+            logging.exception(f"✗ Erro inesperado ao responder a consulta da etiqueta {etiqueta}.")
 
     # ── TRANSPORTE ────────────────────────────────────────────
 
-    def _escrever(self, dados: bytes) -> None:
-        """Escreve na conexão ativa (serial ou TCP), uma mensagem por vez."""
+    def _escrever(self, dados: bytes) -> bool:
+        """Escreve na conexão ativa (serial ou TCP), uma mensagem por vez. True se escreveu."""
         with self._lock_escrita:
             try:
                 if self.MODO == "tcp":
                     if self._conexao is None:
                         logging.error("✗ Sem máquina conectada por TCP: resposta descartada.")
-                        return
+                        return False
                     self._conexao.sendall(dados)
                 else:
                     ser = getattr(self, "_serial", None)
                     if ser is None or not ser.is_open:
                         logging.error("✗ Porta serial fechada: resposta descartada.")
-                        return
+                        return False
                     ser.write(dados)
+                return True
             except Exception as e:
                 logging.error(f"✗ Erro ao escrever para a máquina: {type(e).__name__}: {e}")
+                return False
 
     def _serial_is_open(self) -> bool:
         if self.MODO == "tcp":
@@ -491,6 +585,8 @@ class AnalisadorCA150(BaseAnalisador):
                     mensagem, buffer = self.detect_complete_message(buffer)
         except OSError as e:
             logging.warning(f"Conexão TCP encerrada: {e}")
+        except Exception:
+            logging.exception("✗ Erro inesperado na leitura TCP.")
         finally:
             with self._lock_escrita:
                 if self._conexao is conexao:
