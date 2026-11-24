@@ -21,6 +21,18 @@ from shared.base_analisador import BaseAnalisador
 # FUNÇÕES DE PARSE (Coagmaster-specific)
 # ═══════════════════════════════════════════════════════════
 
+# Teste impresso pela máquina ("Exame: XX") → exame principal no sistema.
+# TT (Tempo de Trombina) e Hep (Heparina) não têm exame no sistema; FIB
+# (FIBRI) existe, mas sem atributo. O lab-apoio recusa esses três com 400 e o
+# motivo fica no log e na tentativa de integração.
+EXAM_CODE_MAP = {
+    'TP': 'TAP',
+    'TTPA': 'KPTT',
+    'APTT': 'KPTT',
+    'FIB': 'FIBRI',
+    'FIBRINOGENIO': 'FIBRI',
+}
+
 def split_exams_from_log(content: str) -> List[str]:
     """
     Separa os exames individuais de um arquivo de log do Coagmaster.
@@ -129,26 +141,29 @@ def parse_coagmaster_exam(text: str) -> Dict[str, str]:
         if match:
             result['TimeValue'] = match.group(1).strip()
 
-        # Relação: RELAÇÃO: X.XX
+        # Os valores ficam como a máquina imprime: a vírgula é o separador
+        # decimal no sistema (ponto nunca é decimal).
+
+        # Relação: RELAÇÃO: X,XX (o lab-apoio não tem atributo para ela)
         match = re.search(r'RELA[CÇ][AÃ]O:\s*([\d,\.]+)', text, re.IGNORECASE)
         if match:
-            result['Relation'] = match.group(1).replace(',', '.')
+            result['Relation'] = match.group(1)
 
-        # Porcentagem
+        # Porcentagem (sem o "%"). Formato do manual (p. 24): "%:   81,4 %".
+        # Também aceita a linha "%" seguida de "81,4%" (simulador antigo).
         for line in lines:
             stripped = line.strip()
-            pct_match = re.match(r'^%\s*:\s*([\d,\.]+)%', stripped)
+            pct_match = re.match(r'^%\s*:?\s*([\d,\.]+)\s*%$', stripped)
+            if not pct_match:
+                pct_match = re.match(r'^([\d,\.]+)\s*%$', stripped)
             if pct_match:
-                result['Percentage'] = pct_match.group(1).replace(',', '.')
-                break
-            if re.match(r'^[\d,]+%$', stripped):
-                result['Percentage'] = stripped.replace(',', '.')
+                result['Percentage'] = pct_match.group(1)
                 break
 
         # INR
         match = re.search(r'INR\s*:?\s*([\d,\.]+)', text, re.IGNORECASE)
         if match:
-            result['INR'] = match.group(1).replace(',', '.')
+            result['INR'] = match.group(1)
 
         # Controle
         match = re.search(r'CONTROLE[^:]*:\s*([\d,\.]+\s*s?)', text, re.IGNORECASE)
@@ -193,28 +208,15 @@ def parse_coagmaster_exam(text: str) -> Dict[str, str]:
                         result['Laboratory'] = prev_line
                 break
 
-        # Campos obrigatórios para o webhook
-        result['FileName'] = result.get('PatientID', '') or result.get('ExamNumber', '')
+        # FileName = etiqueta do tubo (ID impresso pela máquina). Sem ID não há
+        # como achar o procedimento: o número do exame (NNNN) não é etiqueta.
+        result['FileName'] = result.get('PatientID', '')
 
-        # Mapeia ExamType → ExamCode (código real do exame no banco)
+        # ExamCode é só informativo (vai para a tentativa de integração): o
+        # lab-apoio escolhe os procedimentos da etiqueta pelo ExamType, porque
+        # o mesmo tubo pode atender TAP, KPTT e COAGU.
         exam_type = result.get('ExamType', '')
-        exam_code_map = {
-            'TP': 'TAP',           # TEMPO DE PROTROMBINA
-            'TTPA': 'KPTT',        # TEMPO DE TROMBOPLASTINA PARCIAL ATIVADO
-            'APTT': 'KPTT',        # TEMPO DE TROMBOPLASTINA PARCIAL ATIVADO
-            'FIB': 'FIBRI',        # FIBRINOGÊNIO
-            'FIBRINOGENIO': 'FIBRI',  # FIBRINOGÊNIO
-            'TT': 'TCO',           # TEMPO DE COAGULAÇÃO (TROMBINA)
-            'TROMBINA': 'TCO',     # TEMPO DE COAGULAÇÃO (TROMBINA)
-            'COAG': 'COAG',      # ← adicionado
-            'COAGU': 'COAGU',
-        }
-        result['ExamCode'] = exam_code_map.get(exam_type, 'COAGU')
-        if exam_type and exam_type not in exam_code_map:
-            logging.warning(
-                f"Tipo de exame desconhecido: '{exam_type}' — "
-                f"usando fallback 'COAGU'. Verifique se o código existe no banco."
-            )
+        result['ExamCode'] = EXAM_CODE_MAP.get(exam_type, exam_type)
 
         if 'FALHOU' in text.upper():
             result['Status'] = 'FAILED'
@@ -273,44 +275,94 @@ class AnalisadorCoagmaster(BaseAnalisador):
     def _on_serial_message(self, raw_message: str) -> None:
         """
         Sobrescreve o comportamento padrão: processa o log recebido,
-        separa os exames e salva um arquivo .txt por exame em gerados/.
-        Nome do arquivo = tag_identifier (barcode), igual ao MEK7300.
+        separa os exames e salva um arquivo .txt por teste em gerados/.
+
+        A mesma etiqueta recebe vários testes (TP e TTPA do mesmo tubo), então o
+        nome do arquivo leva o teste e o número do exame, e nunca sobrescreve um
+        arquivo ainda não enviado. A etiqueta vai no FileName do payload.
         """
-        logging.info(f"Dados completos recebidos ({len(raw_message)} caracteres)")
+        logging.info(f"✓ Dados recebidos da Coagmaster ({len(raw_message)} caracteres)")
 
         exames = split_exams_from_log(raw_message)
         if not exames:
-            logging.warning("Nenhum exame encontrado no log recebido.")
+            logging.warning("✗ Nenhum exame encontrado no texto recebido.")
             return
 
-        logging.info(f"Encontrados {len(exames)} exame(s) no log.")
+        logging.info(f"Encontrados {len(exames)} exame(s) no texto recebido.")
 
         for i, exame_texto in enumerate(exames, 1):
             payload = parse_coagmaster_exam(exame_texto)
             if not payload:
-                logging.warning(f"Exame {i} inválido, ignorando.")
+                logging.warning(f"✗ Exame {i}: não foi possível ler o texto, ignorado.")
                 continue
 
+            teste = payload.get('ExamType', '?')
+            numero = payload.get('ExamNumber', '?')
             tag = payload.get('FileName', '')
             if not tag:
-                logging.error(f"Exame {i}: FileName vazio, ignorando.")
+                logging.error(
+                    f"✗ Exame {i} (nº {numero}, teste {teste}): sem ID/etiqueta no texto da máquina, ignorado."
+                )
                 continue
 
             # Exames com falha não são salvos para envio
             if payload.get('Status') == 'FAILED':
-                logging.warning(f"Exame {i} (tag: {tag}) FALHOU — ignorado.")
+                logging.warning(f"✗ Exame {i} (etiqueta {tag}, teste {teste}): FALHOU na máquina, ignorado.")
                 continue
 
-            # Salva como .txt (JSON internamente) — nome = barcode
-            filename = f"{tag}.txt"
-            filepath = os.path.join(self.GERADOS_DIR, filename)
+            filepath = self._caminho_unico(tag, teste, numero)
+            filename = os.path.basename(filepath)
 
             try:
                 with open(filepath, "w", encoding="utf-8") as f:
                     json.dump(payload, f, ensure_ascii=False)
-                logging.info(f"Arquivo '{filename}' criado com sucesso.")
+                logging.info(
+                    f"✓ Etiqueta {tag}, teste {teste} (ExamCode {payload.get('ExamCode')}): "
+                    f"arquivo '{filename}' criado para envio."
+                )
             except OSError as e:
-                logging.error(f"Erro ao salvar {filename}: {e}")
+                logging.error(f"✗ Etiqueta {tag}, teste {teste}: erro ao salvar {filename}: {e}")
+
+    def _caminho_unico(self, tag: str, teste: str, numero: str) -> str:
+        """gerados/<etiqueta>_<teste>_<nº do exame>.txt, com sufixo se já existir."""
+        base = re.sub(r'[^\w\-]', '_', f"{tag}_{teste}_{numero}")
+        caminho = os.path.join(self.GERADOS_DIR, f"{base}.txt")
+        sufixo = 2
+        while os.path.exists(caminho):
+            caminho = os.path.join(self.GERADOS_DIR, f"{base}_{sufixo}.txt")
+            sufixo += 1
+        return caminho
+
+    def _on_webhook_response(self, resp: Any, nome_arquivo: str, tag_identifier: str) -> None:
+        """Registra o que o lab-apoio gravou e o que ficou de fora."""
+        try:
+            corpo = resp.json()
+        except ValueError:
+            corpo = None
+        mensagem = str(corpo.get("message") or "") if isinstance(corpo, dict) else resp.text[:300]
+        dados = corpo.get("data") if isinstance(corpo, dict) else None
+
+        if resp.status_code not in (200, 201):
+            logging.error(
+                f"✗ lab-apoio respondeu {resp.status_code} para a etiqueta {tag_identifier} "
+                f"({nome_arquivo}): {mensagem or resp.text[:300]}"
+            )
+            return
+        if not isinstance(dados, dict):
+            return
+
+        for item in dados.get("saved") or []:
+            if isinstance(item, dict):
+                logging.info(
+                    f"✓ Gravado no laudo: etiqueta {tag_identifier}, exame {item.get('exam_code')}, "
+                    f"{item.get('code')}={item.get('value')}."
+                )
+        ignorados = dados.get("ignored") or []
+        if ignorados:
+            logging.warning(
+                f"Itens da etiqueta {tag_identifier} NÃO gravados: {', '.join(map(str, ignorados))}. "
+                f"Motivo provável: o exame não tem esse atributo cadastrado."
+            )
 
     def process_file(
         self, filepath: str, nome_arquivo: str
