@@ -1,0 +1,12 @@
+{
+    "com_port": "COM6",
+    "baud_rate": 9600,
+    "franchise_credential_id": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+    "webhook_url": "https://apoio.internal.vidaexame.com/api/integration/ca-150?franchise_credential_id={franchise_credential_id}",
+    "modo": "tcp",
+    "tcp_host": "0.0.0.0",
+    "tcp_port": 5150,
+    "consult_url": "https://apoio.internal.vidaexame.com/api/interfacing/tag?franchise_credential_id={franchise_credential_id}",
+    "webhook_url_teste_local": "http://localhost:8039/api/integration/ca-150?franchise_credential_id={franchise_credential_id}",
+    "consult_url_teste_local": "http://localhost:8039/api/interfacing/tag?franchise_credential_id={franchise_credential_id}"
+}

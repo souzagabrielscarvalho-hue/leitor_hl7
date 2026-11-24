@@ -82,6 +82,7 @@ class HealthServer:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._stats: Dict[str, Any] = {
+            "version": "",
             "port_open": False,
             "com_port": "",
             "baud_rate": 0,

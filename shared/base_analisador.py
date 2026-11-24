@@ -37,6 +37,7 @@ import requests
 from shared.file_cleanup import FileCleanupConfig, start_cleanup_thread
 from shared.config_loader import load_config
 from shared.health_server import HealthServer
+from shared.versao import VERSAO
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -496,6 +497,8 @@ class BaseAnalisador:
 
     def _setup_config(self, defaults: Dict[str, Any]) -> None:
         _config, _config_status = load_config(self.machine_id, defaults)
+        # Config completo, para as chaves que só uma máquina usa.
+        self.CONFIG = _config
         self.COM_PORT = _config["com_port"]
         self.BAUD_RATE = _config["baud_rate"]
         self.FRANCHISE_CREDENTIAL_ID = _config.get("franchise_credential_id", "")
@@ -590,7 +593,7 @@ class BaseAnalisador:
     def _banner(self) -> None:
         logging.info("=" * 60)
         logging.info(
-            f"Analisador {self.machine_name} - Serviço de Integração"
+            f"Analisador {self.machine_name} - Serviço de Integração - versão {VERSAO}"
         )
         logging.info(
             f"Data/Hora de início: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -629,6 +632,7 @@ class BaseAnalisador:
         if not self._health:
             return
         self._health.update_stats(
+            version=VERSAO,
             com_port=self.COM_PORT,
             baud_rate=self.BAUD_RATE,
             webhook_url=self.WEBHOOK_URL,
@@ -659,6 +663,11 @@ class BaseAnalisador:
                     timeout=30,
                 )
                 self._last_webhook_status = resp.status_code
+                try:
+                    self._on_webhook_response(resp, nome_arquivo, tag_identifier)
+                except Exception as e:
+                    # Só log: falha aqui não pode impedir o envio.
+                    logging.warning(f"Erro ao registrar a resposta do webhook: {type(e).__name__}: {e}")
 
                 if resp.status_code in (200, 201):
                     recusa = _recusa_em_resposta_ok(resp)
@@ -953,6 +962,13 @@ class BaseAnalisador:
         except Exception as ex:
             logging.error(f"Não foi possível exibir o popup: {ex}")
 
+    def _nome_conexao(self, maiuscula: bool = False) -> str:
+        """
+        Como a conexão aparece no log do watchdog: "COM6" no meio da frase e
+        "Porta COM6" no começo dela. A CA-150 em TCP sobrescreve.
+        """
+        return f"Porta {self.COM_PORT}" if maiuscula else self.COM_PORT
+
     def _die_no_connection(self, pendentes: int) -> None:
         """Avisa a queda da conexão com o erro e encerra o processo."""
         mensagem = self._mensagem_queda(pendentes)
@@ -990,7 +1006,7 @@ class BaseAnalisador:
 
                     if self._serial_is_open():
                         if queda_avisada:
-                            logging.info(f"✓ Conexão com {self.COM_PORT} restabelecida.")
+                            logging.info(f"✓ Conexão com {self._nome_conexao()} restabelecida.")
                         self._last_open_time = agora
                         self._limpar_estado_queda()
                         queda_avisada = False
@@ -999,7 +1015,7 @@ class BaseAnalisador:
 
                     if not queda_avisada:
                         logging.warning(
-                            f"⚠ Porta {self.COM_PORT} sem conexão. Tentando "
+                            f"⚠ {self._nome_conexao(maiuscula=True)} sem conexão. Tentando "
                             f"reconectar por até {CONNECTION_DEADLINE // 60} min; "
                             f"os exames de gerados continuam sendo enviados."
                         )
@@ -1284,5 +1300,13 @@ class BaseAnalisador:
         """
         Gera ACK para uma mensagem recebida.
         Retorna bytes do ACK ou None se o protocolo não usa ACK.
+        """
+        return None
+
+    def _on_webhook_response(self, resp: Any, nome_arquivo: str, tag_identifier: str) -> None:
+        """
+        Chamado a cada resposta HTTP do webhook, antes de decidir o sucesso.
+        Serve para a máquina registrar no log detalhes da resposta (ex.: o que
+        foi gravado). Não muda o envio. Por padrão não faz nada.
         """
         return None

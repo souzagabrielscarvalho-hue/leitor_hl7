@@ -1,0 +1,253 @@
+GUIA: DEIXAR A CA-150 OPERANDO COM O HDL
+=========================================
+
+Objetivo: a CA-150 lê a etiqueta do tubo, recebe do sistema o pedido de HDL,
+faz o exame e devolve o resultado direto no atributo HDL do laudo.
+
+Seções do manual citadas: "Manual Operacional CA-150 01.2025" (URIT).
+
+
+-------------------------------------------------------------------------------
+0. ANTES DE COMEÇAR
+-------------------------------------------------------------------------------
+
+[ ] A correção que lê a origem (Interface) do cadastro da UNIDADE precisa estar
+    em produção no lab-apoio (branch FEAT/interfacing-origem-da-unidade).
+    Sem ela, a consulta da etiqueta volta sem exames e a máquina não recebe
+    o HDL.
+
+[ ] Ter a senha de usuário de alta prioridade do software da URIT. Ela é
+    fornecida pelo assessor da URIT (seção 4.3.2).
+
+[ ] Saber o franchise_id (UUID) da unidade onde a máquina fica.
+
+
+-------------------------------------------------------------------------------
+1. CADASTRO NO SISTEMA VIDA
+-------------------------------------------------------------------------------
+
+1.1 Na unidade, abra o exame HDL e confira o atributo HDL:
+    Origem do resultado = Interface (vem da máquina).
+    O atributo OBS continua Manual.
+
+1.2 O código do atributo é HDL. O item na máquina precisa enviar exatamente
+    esse código (ver parte 3.3).
+
+1.3 Conferência: crie uma requisição de teste com HDL e consulte a etiqueta.
+
+    GET https://apoio.internal.vidaexame.com/api/interfacing/tag
+        ?franchise_credential_id=<franchise_id da unidade>
+        &tag_id=<etiqueta>
+
+    A resposta precisa trazer HDL dentro de "exams". Se vier "exams": [], a
+    máquina NÃO vai receber o exame: volte ao passo 1.1.
+
+
+-------------------------------------------------------------------------------
+2. O ca150.exe NO COMPUTADOR DA MÁQUINA
+-------------------------------------------------------------------------------
+
+A CA-150 não tem porta serial: ela se comunica com o LIS só pela rede, por
+TCP/IP (seção 10.2). Quem conversa com o nosso sistema é o software da URIT,
+instalado no computador ligado à máquina. O ca150.exe roda nesse mesmo
+computador.
+
+2.1 Copie o ca150.exe e o config_ca150.json para uma pasta do computador,
+    por exemplo C:\Users\<usuário>\Desktop\CA150\.
+
+2.2 Edite o config_ca150.json:
+
+    {
+      "franchise_credential_id": "<franchise_id da unidade>",
+      "modo": "tcp",
+      "tcp_host": "0.0.0.0",
+      "tcp_port": 5150,
+      "webhook_url": "https://apoio.internal.vidaexame.com/api/integration/ca-150?franchise_credential_id={franchise_credential_id}",
+      "consult_url": "https://apoio.internal.vidaexame.com/api/interfacing/tag?franchise_credential_id={franchise_credential_id}",
+      "com_port": "COM6",
+      "baud_rate": 9600
+    }
+
+    - Deixe {franchise_credential_id} escrito assim nas URLs: o programa
+      troca pelo valor da primeira linha.
+    - com_port e baud_rate são ignorados no modo tcp.
+    - A porta (5150) tem que ser a mesma da tela LIS da máquina (parte 3.1).
+
+2.3 Abra o ca150.exe ANTES do software da URIT e deixe-o aberto.
+
+2.4 Se o Windows perguntar sobre o firewall, permita o acesso em redes
+    privadas.
+
+
+-------------------------------------------------------------------------------
+3. PAINEL DA CA-150 (SOFTWARE DA URIT)
+-------------------------------------------------------------------------------
+
+3.1 Comunicação com o LIS (seção 10.2)
+
+    Ícone de configurações -> Configuração -> LIS
+
+    Servidor IP ................ 127.0.0.1  (o ca150.exe está no mesmo PC)
+    Porta ...................... 5150       (igual ao tcp_port do config)
+    Modo de comunicação ........ Bidirecional
+    Enviar resultado em tempo real ... marcado
+    Conexão automática ........ marcado
+    Tempo limite de conexão ... manter o padrão
+
+    Clique em Salvar e depois em Conectar. O ícone do LIS conectado aparece
+    no topo do software.
+
+    Atenção: no modo Unidirecional a máquina só envia resultados e nunca
+    pede os exames da etiqueta.
+
+3.2 Leitor de código de barras de amostra (seções 2.3.1 e 4.1.2)
+
+    Ícone de configurações -> Configuração -> Sistema -> Configuração de
+    acessórios
+
+    Marque "leitor de código de barras de amostra", clique em Aplicar e
+    reinicie o software da URIT. Esse leitor é um módulo opcional: se ele não
+    estiver instalado na máquina, a consulta automática pela etiqueta não
+    funciona.
+
+3.3 Código do item HDL (seção 4.3)
+
+    O código padrão da URIT é diferente do nosso (ex.: HDL_C). O resultado só
+    é gravado se o código que a máquina envia for igual ao código do atributo
+    no sistema (HDL).
+
+    a) Deixe o analisador parado (a tela Sistema de Teste não pode estar em
+       operação).
+    b) Entre com usuário de alta prioridade.
+    c) Reagentes -> Item Normal -> (digite a senha) -> Geral.
+    d) Selecione o item do HDL na lista e clique em Modificar.
+    e) No campo do código do item, troque para HDL. Aceita letras, números e
+       "_". Não pode repetir outro item; maiúsculas e minúsculas contam como
+       iguais.
+    f) Clique em OK.
+
+    IMPORTANTE (seção 4.3.1): itens de "Sistema Fechado" (cadastrados pela
+    biblioteca da URIT) NÃO deixam alterar o código do item. Se o Modificar
+    não liberar o código, não force: avise a equipe de sistemas. A saída é
+    uma tabela de equivalência no ca150.exe (ex.: HDL_C -> HDL), sem mexer na
+    máquina.
+
+3.4 Reagente, calibração e controle do HDL
+
+    a) Reagentes -> Configurar Posição: confira o frasco do HDL na posição
+       certa e ligado ao item.
+    b) Calibração -> Calibração Rotina: confira se o HDL tem calibração
+       válida (a curva usada fica marcada com Y). Se não tiver, calibre.
+    c) CQ: rode o controle do HDL e confira se está dentro da faixa antes de
+       liberar pacientes.
+
+    Resultado de controle de qualidade NÃO vai para o sistema: o ca150.exe só
+    confirma o recebimento para a máquina.
+
+
+-------------------------------------------------------------------------------
+4. TESTE COM PACIENTE (seção 9)
+-------------------------------------------------------------------------------
+
+4.1 Crie a requisição com HDL na unidade e imprima a etiqueta.
+4.2 Coloque o tubo no disco de amostras com a etiqueta virada para o leitor.
+4.3 Na tela de aplicação de amostra, marque "Usar Escâner do Disco de
+    amostra" e clique em Teste. A máquina lê a etiqueta e pede os exames ao
+    LIS.
+4.4 Confira se o HDL apareceu na amostra e clique em Testar no Sistema de
+    Teste.
+4.5 Ao terminar, o resultado vai sozinho para o sistema. Confira no laudo:
+    HDL preenchido e o procedimento como Digitado (WRITTEN).
+
+
+-------------------------------------------------------------------------------
+5. O LOG DO ca150.exe
+-------------------------------------------------------------------------------
+
+Arquivo: C:\Users\<usuário>\Desktop\AnalisadorCA150\analisador_ca150.log
+Dias anteriores e o trecho de abertura do programa ficam em
+AnalisadorCA150\logs\ (o programa arquiva o log ao iniciar e uma vez por dia).
+
+Cada etapa, com sucesso ou com falha, deixa uma linha. Linhas com ✓ são
+sucesso; com ✗ são falha.
+
+5.1 Fluxo completo com sucesso (exemplo)
+
+    Modo TCP: escutando em 0.0.0.0:5150
+    ✓ Máquina conectada por TCP: 127.0.0.1:50123
+    Consulta da máquina para a etiqueta 231120260013.
+    ✓ Etiqueta 231120260013 encontrada: exames HDL; itens por interface: HDL.
+    ✓ Etiqueta 231120260013: enviados 1 item(ns) à máquina: HDL. Aguardando a confirmação (ACK^Q03).
+    ✓ Máquina confirmou a mensagem 20261123101500 (ACK^Q03, AA).
+    ... (a máquina faz o exame) ...
+    Resultado recebido da máquina: etiqueta 231120260013, itens: HDL=45 mg/dL.
+    ✓ ACK^R01 enviado à máquina.
+    20261123_102310_123456.hl7: 1 item(ns) da etiqueta 231120260013.
+    ✓ Gravado no laudo: etiqueta 231120260013, exame HDL, HDL=45.
+    ✓ [1/5] 20261123_102310_123456.hl7 (tag: 231120260013) enviado com sucesso. Status: 200
+
+5.2 Falhas e o que fazer
+
+    "Etiqueta X não encontrada no sistema."
+        A etiqueta não existe na unidade do franchise_id do config. Confira a
+        etiqueta e o franchise_id.
+
+    "Etiqueta X encontrada, mas sem exames pendentes por interfaceamento"
+        O HDL não está com origem Interface na unidade, ou o procedimento já
+        foi liberado/cancelado. Volte à parte 1.
+
+    "✗ Consulta da etiqueta X falhou" / "status 5xx"
+        O sistema não respondeu (internet ou servidor). A máquina recebe erro
+        (AE). Confira a internet do computador.
+
+    "✗ Sem máquina conectada por TCP" / "não chegou à máquina"
+        A máquina desconectou no meio. Confira o ícone do LIS na URIT e clique
+        em Conectar.
+
+    "✗ Máquina recusou a mensagem ..."
+        A máquina não aceitou a lista de exames. Guarde o log e avise a equipe
+        de sistemas.
+
+    "Itens da etiqueta X NÃO gravados: HDL_C"
+        O código que a máquina enviou não bate com o atributo. Veja a parte
+        3.3 (código do item ou tabela de equivalência).
+
+    "✗ lab-apoio respondeu 400 ...: HDL: procedimento já liberado"
+        O laudo já estava liberado; o resultado não sobrescreve.
+
+    "✗ lab-apoio respondeu 404 ...: Etiqueta X não encontrada na unidade"
+        Etiqueta de outra unidade ou franchise_id errado no config.
+
+    "✗ Falha definitiva: ... Movido para 'requisições não enviadas'"
+        Depois de 5 tentativas o resultado não foi enviado. O arquivo fica em
+        AnalisadorCA150\requisições não enviadas\ para reenvio.
+
+    "⚠ Conexão com a máquina perdida (...)" / "⚠ Máquina na porta TCP 5150 sem conexão"
+        A máquina (software da URIT) desconectou. O programa espera 5 min
+        pela reconexão. Se ela não voltar, envia tudo o que está em
+        AnalisadorCA150\gerados\, mostra o popup "Conexão perdida" e ENCERRA.
+        Abra o ca150.exe de novo e clique em Conectar na tela LIS da URIT.
+        Fechar o software da URIT no fim do dia também fecha o ca150.exe:
+        no dia seguinte, abra o ca150.exe antes do software da URIT.
+
+    "✗ Não foi possível escutar em 0.0.0.0:5150"
+        Outro programa (ou outro ca150.exe) já usa a porta. Feche o duplicado.
+        Aparece também um popup "Porta ocupada" (o programa não encerra e tenta
+        de novo a cada 30 s).
+
+    "✗ Erro inesperado ..."
+        Erro do programa. Guarde o log e avise a equipe de sistemas.
+
+
+-------------------------------------------------------------------------------
+6. RESUMO RÁPIDO
+-------------------------------------------------------------------------------
+
+[ ] HDL com origem Interface na unidade e consulta da etiqueta trazendo HDL
+[ ] config_ca150.json: modo tcp, porta 5150, franchise_id da unidade
+[ ] ca150.exe aberto antes do software da URIT
+[ ] LIS: 127.0.0.1 / 5150 / Bidirecional / tempo real / conexão automática
+[ ] Leitor de código de barras de amostra habilitado
+[ ] Código do item HDL igual ao atributo (ou tabela de equivalência)
+[ ] Reagente na posição, calibração válida e CQ dentro da faixa
+[ ] Teste com paciente: HDL no laudo e ✓ Gravado no laudo no log

@@ -2,5 +2,6 @@
     "com_port": "COM5",
     "baud_rate": 9600,
     "franchise_credential_id": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
-    "webhook_url": "https://apoio.internal.vidaexame.com/api/integration/vidas1600?franchise_credential_id={franchise_credential_id}"
+    "webhook_url": "https://apoio.internal.vidaexame.com/api/integration/vidas1600?franchise_credential_id={franchise_credential_id}",
+    "webhook_url_teste_local": "http://localhost:8039/api/integration/vidas1600?franchise_credential_id={franchise_credential_id}"
 }
