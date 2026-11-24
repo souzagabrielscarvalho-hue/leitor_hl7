@@ -313,6 +313,24 @@ class TestLog(BaseCA150):
         with open(self.analisador.LOG_FILE, encoding="utf-8") as arquivo:
             return arquivo.read()
 
+    def test_abertura_registra_a_versao(self) -> None:
+        from shared.versao import VERSAO
+
+        self.analisador = self.criar()
+        self.analisador._banner()
+
+        self.assertIn(f"Analisador CA150 - Serviço de Integração - versão {VERSAO}", self._log())
+
+    def test_health_check_informa_a_versao(self) -> None:
+        from shared.health_server import HealthServer
+        from shared.versao import VERSAO
+
+        self.analisador = self.criar()
+        self.analisador._health = HealthServer(port=0, machine_name="CA150")
+        self.analisador._update_health_stats()
+
+        self.assertEqual(self.analisador._health._get_stats_snapshot()["version"], VERSAO)
+
     def test_consulta_com_sucesso_registra_cada_etapa(self) -> None:
         self.analisador, _ = self.criar_serial()
 
@@ -399,6 +417,20 @@ class TestLog(BaseCA150):
 
 
 class TestTCP(BaseCA150):
+    def setUp(self) -> None:
+        super().setUp()
+        # Watchdog e envio rápidos; a queda conta depois de 0,3 s sem a máquina.
+        for patch in (
+            mock.patch.object(base_analisador, "WATCHDOG_POLL_INTERVAL", 0.05),
+            mock.patch.object(base_analisador, "CHECK_FILES_INTERVAL", 0.05),
+            mock.patch.object(base_analisador, "CONNECTION_DEADLINE", 0.3),
+            mock.patch.object(base_analisador, "RETRY_INTERVAL", 0),
+        ):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.eventos = []
+        self.encerrou = threading.Event()
+
     def _receber(self, cliente: socket.socket, quantidade: int) -> list:
         recebido = b""
         limite = time.monotonic() + 10
@@ -408,16 +440,40 @@ class TestTCP(BaseCA150):
             recebido += cliente.recv(4096)
         return quadros(recebido)
 
-    def test_consulta_e_resultado_por_tcp(self) -> None:
-        analisador = self.criar(modo="tcp")
-        threading.Thread(target=analisador.start, daemon=True).start()
+    def _esperar(self, condicao, mensagem: str, segundos: float = 10) -> None:
+        limite = time.monotonic() + segundos
+        while not condicao():
+            self.assertLess(time.monotonic(), limite, mensagem)
+            time.sleep(0.02)
 
-        limite = time.monotonic() + 10
-        while analisador._servidor_tcp is None:
-            self.assertLess(time.monotonic(), limite, "servidor TCP não abriu")
-            time.sleep(0.01)
+    def _iniciar_tcp(self) -> AnalisadorCA150:
+        """Sobe o analisador em TCP com popup e encerramento gravados em self.eventos."""
+        analisador = self.criar(modo="tcp")
+        analisador._show_popup = lambda titulo, mensagem: self.eventos.append(("popup", titulo, mensagem))
+
+        def _sair(codigo):
+            self.eventos.append(("exit", codigo))
+            self.encerrou.set()
+
+        patch = mock.patch.object(base_analisador.os, "_exit", side_effect=_sair)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+        threading.Thread(target=analisador.start, daemon=True).start()
+        self._esperar(lambda: analisador._servidor_tcp is not None, "servidor TCP não abriu")
         self.addCleanup(analisador._servidor_tcp.close)
+        # No fim do teste o watchdog fica parado: nada vaza para os próximos testes.
+        self.addCleanup(setattr, analisador, "_serial_is_open", lambda: True)
         time.sleep(0.05)
+        return analisador
+
+    def _conectar(self, analisador: AnalisadorCA150) -> socket.socket:
+        cliente = socket.create_connection(("127.0.0.1", analisador.TCP_PORT), timeout=10)
+        self._esperar(lambda: analisador._conexao is not None, "máquina não conectou")
+        return cliente
+
+    def test_consulta_e_resultado_por_tcp(self) -> None:
+        analisador = self._iniciar_tcp()
 
         with socket.create_connection(("127.0.0.1", analisador.TCP_PORT), timeout=10) as cliente:
             cliente.sendall(QRY.encode("cp1252"))
@@ -430,6 +486,76 @@ class TestTCP(BaseCA150):
             self.assertIn("MSA|AA|202107010001|", ack)
 
         self.assertEqual(len(os.listdir(analisador.GERADOS_DIR)) + len(os.listdir(analisador.ENVIADOS_DIR)) >= 1, True)
+
+    def test_queda_envia_gerados_antes_do_popup_e_encerra(self) -> None:
+        analisador = self._iniciar_tcp()
+        cliente = self._conectar(analisador)
+
+        cliente.close()
+        self._esperar(lambda: not analisador._serial_is_open(), "queda não detectada")
+        with open(os.path.join(analisador.GERADOS_DIR, "pendente.hl7"), "w", encoding="utf-8", newline="") as arquivo:
+            arquivo.write(ORU_PACIENTE)
+
+        self.assertTrue(self.encerrou.wait(15), self.eventos)
+
+        # O resultado foi enviado antes do popup.
+        self.assertTrue([r for r in self.servidor.requisicoes if r["metodo"] == "POST"])
+        self.assertIn("pendente.hl7", os.listdir(analisador.ENVIADOS_DIR))
+        self.assertEqual([evento[0] for evento in self.eventos[:2]], ["popup", "exit"])
+        _, titulo, mensagem = self.eventos[0]
+        self.assertEqual(titulo, "Conexão perdida - CA150")
+        self.assertIn("foi perdida e não voltou", mensagem)
+        self.assertIn(f"Conexão: TCP, porta {analisador.TCP_PORT}", mensagem)
+        self.assertIn("enviados durante a queda: 1", mensagem)
+        self.assertIn("ainda pendentes (serão enviados ao reabrir): 0", mensagem)
+
+    def test_maquina_que_reconecta_no_prazo_nao_encerra(self) -> None:
+        with mock.patch.object(base_analisador, "CONNECTION_DEADLINE", 2):
+            analisador = self._iniciar_tcp()
+            self._conectar(analisador).close()
+            self._esperar(lambda: not analisador._serial_is_open(), "queda não detectada")
+
+            cliente = self._conectar(analisador)
+            time.sleep(2.5)
+            cliente.close()
+
+        self.assertEqual(self.eventos, [])
+
+    def test_antes_da_primeira_conexao_nao_encerra(self) -> None:
+        analisador = self._iniciar_tcp()
+
+        time.sleep(1)
+
+        self.assertTrue(analisador._serial_is_open())
+        self.assertEqual(self.eventos, [])
+
+    def test_conexao_substituida_nao_e_queda(self) -> None:
+        with mock.patch.object(base_analisador, "CONNECTION_DEADLINE", 5):
+            analisador = self._iniciar_tcp()
+            primeira = self._conectar(analisador)
+            antiga = analisador._conexao
+            segunda = socket.create_connection(("127.0.0.1", analisador.TCP_PORT), timeout=10)
+            self._esperar(lambda: analisador._conexao not in (None, antiga), "nova conexão não substituiu")
+            time.sleep(0.3)
+
+            self.assertTrue(analisador._serial_is_open())
+            self.assertEqual(self.eventos, [])
+            primeira.close()
+            segunda.close()
+
+    def test_porta_ocupada_avisa_sem_empilhar_popups(self) -> None:
+        analisador = self.criar(modo="tcp")
+        liberar = threading.Event()
+        with mock.patch.object(AnalisadorCA150, "_show_popup", side_effect=lambda *a: liberar.wait(5)) as popup:
+            analisador._popup_sem_travar("t", "primeira")
+            self._esperar(lambda: popup.call_count == 1, "primeiro popup não abriu")
+            analisador._popup_sem_travar("t", "segunda")
+            time.sleep(0.1)
+            self.assertEqual(popup.call_count, 1)
+            liberar.set()
+            self._esperar(lambda: not analisador._popup_aberto.is_set(), "popup não fechou")
+            analisador._popup_sem_travar("t", "terceira")
+            self._esperar(lambda: popup.call_count == 2, "popup não reabriu depois de fechado")
 
 
 if __name__ == "__main__":

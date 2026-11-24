@@ -7,7 +7,7 @@ Sistema de integração para leitura de dados de analisadores laboratoriais via 
 | Analisador | Pasta | Protocolo | Porta Padrão |
 |---|---|---|---|
 | **BH5100** (Mindray) | `bh5100/` | HL7 via serial | COM3 |
-| **CA-150** (URIT) | `ca150/` | HL7 via serial ou TCP/IP, com consulta por etiqueta | COM6 / TCP 5100 |
+| **CA-150** (URIT) | `ca150/` | HL7 via TCP/IP (a máquina não tem serial), com consulta por etiqueta | TCP 5150 |
 | **Coagmaster** (Teco) | `Coagmaster/` | Log proprietário via serial | COM4 |
 | **MEK7300** (Nihon Kohden) | `mek7300/` | Texto proprietário via serial | COM4 |
 | **VIDAS 1600** (bioMérieux) | `vidas1600/` | HL7 via serial | COM5 |
@@ -189,22 +189,22 @@ O `config_ca150.json` escolhe a conexão:
 
 ```json
 {
-    "modo": "serial",          // "serial" (com_port, baud_rate) ou "tcp"
+    "modo": "tcp",             // a CA-150 só fala por rede; "serial" fica para testes
     "com_port": "COM6",
     "baud_rate": 9600,
     "tcp_host": "0.0.0.0",     // no modo tcp: a máquina conecta no IP do PC
-    "tcp_port": 5100,          //   e nesta porta (liberar no Firewall do Windows)
+    "tcp_port": 5150,          //   e nesta porta, a mesma da tela LIS da URIT (liberar no Firewall)
     "franchise_credential_id": "<franchise_id da unidade>",
     "webhook_url": ".../api/integration/ca-150?franchise_credential_id={franchise_credential_id}",
     "consult_url": ".../api/interfacing/tag?franchise_credential_id={franchise_credential_id}"
 }
 ```
 
-No modo TCP, uma conexão nova da máquina substitui a anterior e o programa não encerra quando a máquina desconecta. Health check em `http://localhost:8085/health`.
+No modo TCP, uma conexão nova da máquina substitui a anterior. Se a máquina desconectar e não voltar em 5 minutos, vale a mesma regra da queda da COM (abaixo): o programa envia `gerados/`, mostra o popup e encerra. Antes da primeira conexão não conta como queda. Health check em `http://localhost:8085/health`.
 
 ## Queda da conexão COM
 
-Vale para `bh5100`, `ca150` (modo serial), `coagmaster`, `mek7300`, `pkl` e `vidas1600`. O envio de resultados e imagens roda em uma thread separada da leitura serial, então continua com a COM caída.
+Vale para `bh5100`, `ca150` (serial e TCP), `coagmaster`, `mek7300`, `pkl` e `vidas1600`. O envio de resultados e imagens roda em uma thread separada da leitura serial, então continua com a COM caída.
 
 1. Enquanto a porta está caída, o programa tenta reconectar e segue enviando o que estiver em `gerados/`. Se a porta voltar em até 5 minutos, nada muda para o usuário.
 2. Depois de 5 minutos sem conexão, ele encerra assim que `gerados/` esvaziar.
@@ -255,6 +255,8 @@ O `build/bh5100/config_bh5100.json` tem o token da máquina e não é versionado
 
 Na CA-150, a consulta por etiqueta também vai para o local:
 `"consult_url": "http://localhost:8039/api/interfacing/tag?franchise_credential_id={franchise_credential_id}"`.
+
+Os configs versionados em `build/` já trazem essas URLs nas chaves `webhook_url_teste_local` (e `consult_url_teste_local` na CA-150, `exam_images_url_teste_local` na BH5100). O programa ignora essas chaves: para testar, copie o valor para a chave principal no config ao lado do `.exe` de teste.
 
 Cada máquina tem a sua rota: a BH5100 grava hemograma, e mandar outra máquina para `/integration/bh5100` não grava os resultados. O `franchise_credential_id` precisa ser o `franchise_id` de uma unidade cadastrada no banco local. Os configs versionados em `build/` continuam apontando para produção (`https://apoio.internal.vidaexame.com`).
 

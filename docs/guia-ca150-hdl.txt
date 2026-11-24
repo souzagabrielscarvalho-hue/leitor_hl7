@@ -222,8 +222,18 @@ sucesso; com ✗ são falha.
         Depois de 5 tentativas o resultado não foi enviado. O arquivo fica em
         AnalisadorCA150\requisições não enviadas\ para reenvio.
 
+    "⚠ Conexão com a máquina perdida (...)" / "⚠ Máquina na porta TCP 5150 sem conexão"
+        A máquina (software da URIT) desconectou. O programa espera 5 min
+        pela reconexão. Se ela não voltar, envia tudo o que está em
+        AnalisadorCA150\gerados\, mostra o popup "Conexão perdida" e ENCERRA.
+        Abra o ca150.exe de novo e clique em Conectar na tela LIS da URIT.
+        Fechar o software da URIT no fim do dia também fecha o ca150.exe:
+        no dia seguinte, abra o ca150.exe antes do software da URIT.
+
     "✗ Não foi possível escutar em 0.0.0.0:5150"
         Outro programa (ou outro ca150.exe) já usa a porta. Feche o duplicado.
+        Aparece também um popup "Porta ocupada" (o programa não encerra e tenta
+        de novo a cada 30 s).
 
     "✗ Erro inesperado ..."
         Erro do programa. Guarde o log e avise a equipe de sistemas.

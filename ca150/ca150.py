@@ -36,6 +36,7 @@ import requests
 
 # Adiciona raiz do projeto ao path para importar shared
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from shared import base_analisador
 from shared.base_analisador import BaseAnalisador
 
 # ═══════════════════════════════════════════════════════════
@@ -277,7 +278,8 @@ class AnalisadorCA150(BaseAnalisador):
         super().__init__(*args, **kwargs)
         self.MODO = str(self.CONFIG.get("modo") or "serial").strip().lower()
         self.TCP_HOST = str(self.CONFIG.get("tcp_host") or "0.0.0.0")
-        self.TCP_PORT = int(self.CONFIG.get("tcp_port") or 5100)
+        porta = self.CONFIG.get("tcp_port")
+        self.TCP_PORT = int(porta) if porta not in (None, "") else 5150
 
         bruta = self.CONFIG.get("consult_url") or ""
         try:
@@ -289,6 +291,10 @@ class AnalisadorCA150(BaseAnalisador):
         self._lock_consulta = threading.Lock()
         self._conexao: Optional[socket.socket] = None
         self._servidor_tcp: Optional[socket.socket] = None
+        self._popup_aberto = threading.Event()
+        # Antes da primeira conexão não é queda: a máquina pode estar desligada.
+        self._ja_conectou = False
+        self._endereco_maquina = ""
 
         if not self.CONSULT_URL:
             logging.error("✗ consult_url vazio no config: as consultas da máquina vão responder erro (AE).")
@@ -510,9 +516,49 @@ class AnalisadorCA150(BaseAnalisador):
                 return False
 
     def _serial_is_open(self) -> bool:
+        """
+        Em TCP, "conectado" é ter a máquina ligada ao programa. Enquanto ela
+        nunca conectou, não conta como queda (watchdog não encerra).
+        """
         if self.MODO == "tcp":
-            return self._servidor_tcp is not None
+            return not self._ja_conectou or self._conexao is not None
         return super()._serial_is_open()
+
+    def _nome_conexao(self, maiuscula: bool = False) -> str:
+        if self.MODO != "tcp":
+            return super()._nome_conexao(maiuscula)
+        return f"{'M' if maiuscula else 'a m'}áquina na porta TCP {self.TCP_PORT}"
+
+    def _mensagem_queda(self, pendentes: int) -> str:
+        if self.MODO != "tcp":
+            return super()._mensagem_queda(pendentes)
+        erro = self._erro_queda or "não informado"
+        return "\n".join([
+            f"A conexão com o analisador {self.machine_name} foi perdida e não voltou "
+            f"em {base_analisador.CONNECTION_DEADLINE // 60} min.",
+            "",
+            f"Conexão: TCP, porta {self.TCP_PORT} (máquina: {self._endereco_maquina or 'não informada'})",
+            f"Motivo: {erro}",
+            "",
+            "Exames da pasta gerados:",
+            f"- enviados durante a queda: {self._enviados_na_queda}",
+            f'- não enviados (pasta "requisições não enviadas"): {self._nao_enviados_na_queda}',
+            f"- ainda pendentes (serão enviados ao reabrir): {pendentes}",
+            "",
+            "O programa será encerrado. Abra o ca150.exe de novo e, no software da URIT,",
+            "clique em Conectar (Configuração -> LIS).",
+        ])
+
+    def _die_no_connection(self, pendentes: int) -> None:
+        if self.MODO == "tcp":
+            # Solta a porta antes do popup, para o programa poder ser reaberto.
+            for sock in (self._conexao, self._servidor_tcp):
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+        super()._die_no_connection(pendentes)
 
     def start(self) -> None:
         if self.MODO != "tcp":
@@ -524,9 +570,31 @@ class AnalisadorCA150(BaseAnalisador):
         logging.info(f"Consulta: {self.CONSULT_URL}")
         Thread(target=self._task_sender_to_webhook, daemon=True).start()
         self._start_health_server()
+        # Mesmo watchdog da serial: queda sem reconexão em CONNECTION_DEADLINE
+        # espera gerados/ ser enviada, mostra o popup e encerra.
+        self._start_connection_watchdog()
         self._servir_tcp()
 
+    def _popup_sem_travar(self, titulo: str, mensagem: str) -> None:
+        """
+        Popup que não encerra nem trava o programa (abre numa thread própria).
+        Com um aviso já aberto, não empilha outro (fica só no log).
+        """
+        if self._popup_aberto.is_set():
+            logging.info("Aviso já aberto na tela; novo aviso só no log.")
+            return
+        self._popup_aberto.set()
+
+        def _mostrar() -> None:
+            try:
+                self._show_popup(titulo, mensagem)
+            finally:
+                self._popup_aberto.clear()
+
+        Thread(target=_mostrar, daemon=True, name="popup-queda").start()
+
     def _abrir_servidor_tcp(self) -> socket.socket:
+        avisado = False
         while True:
             try:
                 servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -539,6 +607,15 @@ class AnalisadorCA150(BaseAnalisador):
                     f"✗ Não foi possível escutar em {self.TCP_HOST}:{self.TCP_PORT}: {e}. "
                     f"Tentando de novo em {TCP_RETRY_INTERVAL}s..."
                 )
+                if not avisado:
+                    avisado = True
+                    self._popup_sem_travar(
+                        f"Porta ocupada - {self.machine_name}",
+                        f"O programa da {self.machine_name} não conseguiu abrir a porta {self.TCP_PORT}.\n\n"
+                        f"Erro: {e}\n\n"
+                        f"Provável causa: outro ca150.exe (ou outro programa) já está usando a porta.\n"
+                        f"Feche o programa duplicado. Esta janela tenta de novo a cada {TCP_RETRY_INTERVAL}s."
+                    )
                 time.sleep(TCP_RETRY_INTERVAL)
 
     def _servir_tcp(self) -> None:
@@ -568,11 +645,14 @@ class AnalisadorCA150(BaseAnalisador):
                     anterior.close()
                 except OSError:
                     pass
-            logging.info(f"✓ Máquina conectada por TCP: {endereco[0]}:{endereco[1]}")
-            Thread(target=self._ler_tcp, args=(conexao,), daemon=True).start()
+            self._ja_conectou = True
+            self._endereco_maquina = f"{endereco[0]}:{endereco[1]}"
+            logging.info(f"✓ Máquina conectada por TCP: {self._endereco_maquina}")
+            Thread(target=self._ler_tcp, args=(conexao, f"{endereco[0]}:{endereco[1]}"), daemon=True).start()
 
-    def _ler_tcp(self, conexao: socket.socket) -> None:
+    def _ler_tcp(self, conexao: socket.socket, endereco: str = "") -> None:
         buffer = ""
+        motivo = "a máquina fechou a conexão"
         try:
             while True:
                 dados = conexao.recv(4096)
@@ -584,18 +664,31 @@ class AnalisadorCA150(BaseAnalisador):
                     self._on_serial_message(mensagem)
                     mensagem, buffer = self.detect_complete_message(buffer)
         except OSError as e:
+            motivo = f"{type(e).__name__}: {e}"
             logging.warning(f"Conexão TCP encerrada: {e}")
-        except Exception:
+        except Exception as e:
+            motivo = f"erro inesperado: {type(e).__name__}: {e}"
             logging.exception("✗ Erro inesperado na leitura TCP.")
         finally:
             with self._lock_escrita:
-                if self._conexao is conexao:
+                # Conexão substituída por uma nova não é queda.
+                caiu = self._conexao is conexao
+                if caiu:
                     self._conexao = None
             try:
                 conexao.close()
             except OSError:
                 pass
-            logging.info("Máquina desconectou do TCP; aguardando nova conexão.")
+            if caiu:
+                # O popup e o encerramento ficam com o watchdog, depois que
+                # gerados/ for enviada (regra igual à da serial).
+                self._erro_queda = motivo
+                logging.warning(
+                    f"⚠ Conexão com a máquina perdida ({endereco or 'sem endereço'}): {motivo}. "
+                    f"Aguardando nova conexão."
+                )
+            else:
+                logging.info("Conexão TCP antiga encerrada (substituída pela nova).")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -607,11 +700,13 @@ if __name__ == "__main__":
         machine_id="ca150",
         machine_name="CA150",
         config_defaults={
-            "modo": "serial",
+            # A CA-150 só se comunica por rede (manual operacional, seção 10.2);
+            # 5150 é a porta padrão da tela LIS da URIT.
+            "modo": "tcp",
             "com_port": "COM6",
             "baud_rate": 9600,
             "tcp_host": "0.0.0.0",
-            "tcp_port": 5100,
+            "tcp_port": 5150,
             "franchise_credential_id": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
             "webhook_url": f"{URL_BASE}/integration/ca-150?franchise_credential_id={{franchise_credential_id}}",
             "consult_url": f"{URL_BASE}/interfacing/tag?franchise_credential_id={{franchise_credential_id}}",

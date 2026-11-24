@@ -3,5 +3,6 @@
     "baud_rate": 19200,
     "franchise_credential_id": "XXXXXXXXXXXXXXXXX",
     "webhook_url": "https://apoio.internal.vidaexame.com/api/integration/pkl-125?franchise_credential_id={franchise_credential_id}",
-    "pkl_machine_id": "XXXXXXXXXXXXXXXXX\u0026"
+    "pkl_machine_id": "XXXXXXXXXXXXXXXXX&",
+    "webhook_url_teste_local": "http://localhost:8039/api/integration/pkl-125?franchise_credential_id={franchise_credential_id}"
 }

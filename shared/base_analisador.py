@@ -37,6 +37,7 @@ import requests
 from shared.file_cleanup import FileCleanupConfig, start_cleanup_thread
 from shared.config_loader import load_config
 from shared.health_server import HealthServer
+from shared.versao import VERSAO
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -592,7 +593,7 @@ class BaseAnalisador:
     def _banner(self) -> None:
         logging.info("=" * 60)
         logging.info(
-            f"Analisador {self.machine_name} - Serviço de Integração"
+            f"Analisador {self.machine_name} - Serviço de Integração - versão {VERSAO}"
         )
         logging.info(
             f"Data/Hora de início: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -631,6 +632,7 @@ class BaseAnalisador:
         if not self._health:
             return
         self._health.update_stats(
+            version=VERSAO,
             com_port=self.COM_PORT,
             baud_rate=self.BAUD_RATE,
             webhook_url=self.WEBHOOK_URL,
@@ -960,6 +962,13 @@ class BaseAnalisador:
         except Exception as ex:
             logging.error(f"Não foi possível exibir o popup: {ex}")
 
+    def _nome_conexao(self, maiuscula: bool = False) -> str:
+        """
+        Como a conexão aparece no log do watchdog: "COM6" no meio da frase e
+        "Porta COM6" no começo dela. A CA-150 em TCP sobrescreve.
+        """
+        return f"Porta {self.COM_PORT}" if maiuscula else self.COM_PORT
+
     def _die_no_connection(self, pendentes: int) -> None:
         """Avisa a queda da conexão com o erro e encerra o processo."""
         mensagem = self._mensagem_queda(pendentes)
@@ -997,7 +1006,7 @@ class BaseAnalisador:
 
                     if self._serial_is_open():
                         if queda_avisada:
-                            logging.info(f"✓ Conexão com {self.COM_PORT} restabelecida.")
+                            logging.info(f"✓ Conexão com {self._nome_conexao()} restabelecida.")
                         self._last_open_time = agora
                         self._limpar_estado_queda()
                         queda_avisada = False
@@ -1006,7 +1015,7 @@ class BaseAnalisador:
 
                     if not queda_avisada:
                         logging.warning(
-                            f"⚠ Porta {self.COM_PORT} sem conexão. Tentando "
+                            f"⚠ {self._nome_conexao(maiuscula=True)} sem conexão. Tentando "
                             f"reconectar por até {CONNECTION_DEADLINE // 60} min; "
                             f"os exames de gerados continuam sendo enviados."
                         )
