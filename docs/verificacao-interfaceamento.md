@@ -29,6 +29,7 @@ No computador conectado à máquina, abra o **Gerenciador de Tarefas** (`Ctrl+Sh
 | **Coagmaster** | `coagmaster.exe` | `http://localhost:8081/health` |
 | **MEK7300** | `mek7300.exe` | `http://localhost:8082/health` |
 | **PKL125** | `pkl.exe` | `http://localhost:8083/health` |
+| **URIT-8021A** | `urit8021.exe` | `http://localhost:8086/health` |
 | **VIDAS 1600** | `vidas1600.exe` | `http://localhost:8084/health` |
 
 Se o processo **não estiver rodando**, reinicie-o (veja seção 2.4).
@@ -119,6 +120,7 @@ O arquivo `config_<máquina>.json` contém a configuração da porta serial. Exe
 | **Coagmaster** | COM4 | 115200 |
 | **MEK7300** | COM5 | 9600 |
 | **PKL125** | COM3 | 19200 |
+| **URIT-8021A** | TCP 8021 (ou COM7, conforme `modo` no config) | 9600 |
 | **VIDAS 1600** | COM5 | 9600 |
 
 > ⚠️ **Atenção:** A porta COM padrão é apenas um valor inicial. A porta real depende de onde o cabo foi conectado. Sempre confira no Gerenciador de Dispositivos.

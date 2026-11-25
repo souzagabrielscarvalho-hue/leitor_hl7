@@ -1,6 +1,6 @@
 # Guia para IA: leitor_hl7
 
-Leitores das máquinas de laboratório (BH5100, CA-150, Coagmaster, MEK7300, PKL, VIDAS 1600). Cada leitor vira um `.exe`
+Leitores das máquinas de laboratório (BH5100, CA-150, Coagmaster, MEK7300, PKL, URIT-8021A, VIDAS 1600). Cada leitor vira um `.exe`
 (PyInstaller) que roda no Windows ao lado da máquina, lê os resultados (serial ou TCP) e envia ao lab-apoio.
 
 Responda, comente o código e escreva commits em português do Brasil.
@@ -41,7 +41,7 @@ Responda, comente o código e escreva commits em português do Brasil.
 - Em TCP, antes da primeira conexão da máquina não é queda, e uma conexão substituída por outra também não.
 - Popup que não deve encerrar (ex.: porta TCP ocupada) usa `_popup_sem_travar` e nunca abre dois ao mesmo tempo.
 - Toda máquina nova precisa ter teste de queda (veja `tests/test_interfaceamento.py::TestQuedaCOM` e
-  `tests/test_ca150.py::TestTCP`).
+  `tests/test_ca150.py::TestTCP` ou `tests/test_urit8021.py::TestTCP`).
 
 ### 3. Nunca commitar chave real
 
@@ -64,12 +64,23 @@ Responda, comente o código e escreva commits em português do Brasil.
 ### 5. Sempre deixar o número da versão
 
 - A versão é uma só para todos os leitores, em `shared/versao.py` (`VERSAO`), no formato MAJOR.MINOR.PATCH. A atual
-  é **7.0.1**.
+  é **7.1.0**.
 - Toda mudança que gera `.exe` novo sobe a versão (MAJOR: muda a instalação, como config, rota ou protocolo;
   MINOR: função nova; PATCH: correção) e ganha uma entrada no `CHANGELOG.md`.
 - A versão aparece na abertura do log (`Analisador <MAQUINA> - Serviço de Integração - versão X.Y.Z`) e no
   `GET /health` (`version`). Não remova esses pontos.
 - Depois de subir a versão, recompile os `.exe` afetados para que eles mostrem o número novo.
+
+### 6. Sempre criar e utilizar um endpoint separado para cada máquina
+
+- Cada máquina envia para a sua própria rota no lab-apoio (`POST /api/integration/<maquina>`), com o seu
+  `IntegrationNameEnum` (tentativa na Atividade de Integração), canal de log e reenvio em
+  `IntegrationAttemptController`. Nunca aponte o `webhook_url` de uma máquina para a rota de outra, mesmo com o
+  mesmo payload.
+- Se a regra de gravação for igual à de outra máquina, reaproveite o service (ex.: `IntegrationUrit8021Service`
+  estende `IntegrationCa150Service` e só troca o canal de log), mas mantenha rota, controller e tentativa próprios.
+- Máquina nova: crie a rota e o teste no lab-apoio (`tests/Feature/Integration<Maquina>Test.php`) junto com o leitor,
+  e use essa rota no `webhook_url` do `config_defaults` e do `build/<maquina>/config_*.json`.
 
 ## Testes e build
 

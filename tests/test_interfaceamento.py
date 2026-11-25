@@ -33,6 +33,10 @@ from shared.base_analisador import BaseAnalisador
 from shared.file_cleanup import rotate_daily_folders
 from vidas1600.vidas1600 import AnalisadorVIDAS1600
 
+# A pasta tem hífen (urit-8021): entra no path para o import.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "urit-8021"))
+from urit8021 import AnalisadorURIT8021  # noqa: E402
+
 try:
     from PIL import Image
 except ImportError:
@@ -65,6 +69,12 @@ HL7_VIDAS = "\x0b" + "\r".join([
 
 TXT_MEK = "FileName: 151020262929\r\nWBC: 5.800\r\n"
 JSON_COAG = json.dumps({"FileName": "151020262929", "ExamCode": "TAP"})
+HL7_URIT8021 = "\x0b" + "\r".join([
+    "MSH|^~\\&|urit|8021A|||20261105103931||ORU^R01|1|P|2.3.1||||0||ASCII|||",
+    "OBR|1|151020262929|202611050001|urit^8021A|N||2026-11-05|",
+    "OBX|1|NM|1|GLU|5.4|mmol/L|3.9-6.1|N|||F||0.3|2026-11-05||Server||",
+]) + "\r\x1c\r"
+
 JSON_PKL = json.dumps({
     "franchise_credential_id": "",
     "tag_id": "151020262929",
@@ -81,6 +91,10 @@ MAQUINAS = {
     ),
     "coagmaster": (AnalisadorCoagmaster, "Coagmaster", {}, "exame.txt", JSON_COAG, {}),
     "vidas1600": (AnalisadorVIDAS1600, "VIDAS1600", {}, "exame.hl7", HL7_VIDAS, {}),
+    "urit8021": (
+        AnalisadorURIT8021, "URIT8021", {}, "exame.hl7", HL7_URIT8021,
+        {"modo": "serial", "consult_url": ""},
+    ),
     "pkl": (
         AnalisadorPKL125, "PKL125", {"use_serial_listener": True},
         "exame.astm", JSON_PKL, {"pkl_machine_id": ""},
@@ -440,6 +454,9 @@ class TestQuedaCOM(BaseTeste):
 
     def test_queda_pkl(self) -> None:
         self._verificar_queda("pkl")
+
+    def test_queda_urit8021(self) -> None:
+        self._verificar_queda("urit8021")
 
     def _verificar_reconexao(self, maquina: str) -> None:
         analisador = self.criar(maquina)

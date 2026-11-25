@@ -30,6 +30,7 @@ $Maquinas = @(
     @{ Nome = "coagmaster"; SpecDir = "Coagmaster" },
     @{ Nome = "mek7300";    SpecDir = "mek7300" },
     @{ Nome = "pkl";        SpecDir = "pkl" },
+    @{ Nome = "urit8021";   SpecDir = "urit-8021" },
     @{ Nome = "vidas1600";  SpecDir = "vidas1600" }
 )
 
