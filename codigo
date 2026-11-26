@@ -1,31 +1,19 @@
-# Copie UMA linha (a de baixo do comentario) e cole no PowerShell.
+# Rode no terminal do VSCode (Ubuntu/WSL). Copie UMA linha e cole.
 
 # Gera o .exe de TODAS as maquinas
-powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_todas.ps1"
+/home/gabriel/Vida-Exame/leitor_hl7/Comandos/build.sh todas
 
-# Gera o .exe so do BH5100
-powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_bh5100.ps1"
-
-# Gera o .exe so da CA-150
-powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_ca150.ps1"
-
-# Gera o .exe so do Coagmaster
-powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_coagmaster.ps1"
-
-# Gera o .exe so do MEK7300
-powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_mek7300.ps1"
-
-# Gera o .exe so do PKL (pkl + test_get_only)
-powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_pkl.ps1"
-
-# Gera o .exe so da URIT-8021A
-powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_urit8021.ps1"
-
-# Gera o .exe so do VIDAS 1600
-powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_vidas1600.ps1"
+# Gera o .exe de UMA maquina (troque o nome no final)
+/home/gabriel/Vida-Exame/leitor_hl7/Comandos/build.sh bh5100
+/home/gabriel/Vida-Exame/leitor_hl7/Comandos/build.sh ca150
+/home/gabriel/Vida-Exame/leitor_hl7/Comandos/build.sh coagmaster
+/home/gabriel/Vida-Exame/leitor_hl7/Comandos/build.sh mek7300
+/home/gabriel/Vida-Exame/leitor_hl7/Comandos/build.sh pkl
+/home/gabriel/Vida-Exame/leitor_hl7/Comandos/build.sh urit8021
+/home/gabriel/Vida-Exame/leitor_hl7/Comandos/build.sh vidas1600
 
 # Envia tudo para o repositorio PESSOAL
-powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\enviar_pessoal.ps1"
+/home/gabriel/Vida-Exame/leitor_hl7/Comandos/enviar.sh pessoal
 
 # Envia tudo para o PESSOAL e a EMPRESA
-powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\enviar_pessoal_empresa.ps1"
+/home/gabriel/Vida-Exame/leitor_hl7/Comandos/enviar.sh ambos
