@@ -1,5 +1,31 @@
-cd c:\repositorio\leitor_hl7
-powershell -ExecutionPolicy Bypass -File .\build_all.ps1
+# Copie UMA linha (a de baixo do comentario) e cole no PowerShell.
 
-powershell -ExecutionPolicy Bypass -File .\enviar.ps1 empresa
-powershell -ExecutionPolicy Bypass -File .\enviar.ps1 pessoal
+# Gera o .exe de TODAS as maquinas
+powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_todas.ps1"
+
+# Gera o .exe so do BH5100
+powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_bh5100.ps1"
+
+# Gera o .exe so da CA-150
+powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_ca150.ps1"
+
+# Gera o .exe so do Coagmaster
+powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_coagmaster.ps1"
+
+# Gera o .exe so do MEK7300
+powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_mek7300.ps1"
+
+# Gera o .exe so do PKL (pkl + test_get_only)
+powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_pkl.ps1"
+
+# Gera o .exe so da URIT-8021A
+powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_urit8021.ps1"
+
+# Gera o .exe so do VIDAS 1600
+powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\build_vidas1600.ps1"
+
+# Envia tudo para o repositorio PESSOAL
+powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\enviar_pessoal.ps1"
+
+# Envia tudo para o PESSOAL e a EMPRESA
+powershell -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\gabriel\Vida-Exame\leitor_hl7\Comandos\enviar_pessoal_empresa.ps1"
