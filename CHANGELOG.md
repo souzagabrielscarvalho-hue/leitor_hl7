@@ -3,6 +3,16 @@
 Versão única para todos os leitores, definida em `shared/versao.py`. Ela aparece na abertura do
 `analisador_<maquina>.log` e no `GET /health`.
 
+## 7.1.1 - 2026-11-26
+
+- BH5100: corrige o `ValueError: substring not found` no parsing serial (`detect_complete_message`).
+  Um `EB` órfão antes do `SB` no buffer (frame parcial/ruído deixado por uma queda da COM) fazia o
+  loop serial ficar preso reprocessando o mesmo lixo (rajadas de `Erro no loop serial` ~1x/s). Agora
+  usa `str.find`, descarta o lixo anterior ao `SB` e ignora frames inválidos (`EB` sem `CR`).
+- Log de envio (todas as máquinas): quando o lab-apoio recusa por regra de negócio (HTTP 400, ex.:
+  etiqueta não cadastrada/inválida), a linha deixa de dizer "após N tentativas" e passa a indicar a
+  causa real, citando a etiqueta, orientando a corrigir antes de reenviar.
+
 ## 7.1.0 - 2026-11-24
 
 - URIT-8021A (bioquímica): leitor novo `urit8021.exe`, pelo "Urit HL7 LIS Interface Dev Reference Manual".

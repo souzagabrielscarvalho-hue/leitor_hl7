@@ -9,4 +9,4 @@ Siga MAJOR.MINOR.PATCH e anote cada versão no CHANGELOG.md:
 A versão aparece na abertura do log (analisador_<maquina>.log) e no GET /health.
 """
 
-VERSAO = "7.1.0"
+VERSAO = "7.1.1"

@@ -824,11 +824,13 @@ class BaseAnalisador:
 
                     # Envia cada payload
                     all_sent = True
+                    tag_falha = nome_arquivo
                     for payload in payloads:
                         tag = payload.get("FileName", payload.get("tag_id", nome_arquivo))
                         sent = self._enviar_payload_webhook(payload, nome_arquivo, str(tag))
                         if not sent:
                             all_sent = False
+                            tag_falha = str(tag)
 
                     if all_sent:
                         try:
@@ -837,11 +839,21 @@ class BaseAnalisador:
                         except OSError as e:
                             logging.error(f"✗ Falha ao mover arquivo {nome_arquivo}: {e}")
                     else:
-                        logging.error(
-                            f"✗ Falha definitiva: {nome_arquivo} não foi enviado "
-                            f"após {MAX_RETRY} tentativas. "
-                            f"Movido para '{self.REQUISICOES_NAO_ENVIADAS_DIR}'."
-                        )
+                        if self._last_webhook_status == 400:
+                            # Rejeição de negócio: não é falha de envio, e
+                            # reenviar sem corrigir a etiqueta não resolve.
+                            logging.error(
+                                f"✗ {nome_arquivo} (tag: {tag_falha}) recusado pelo "
+                                f"lab-apoio: etiqueta não cadastrada/inválida. "
+                                f"Reenviar sem corrigir a etiqueta não resolve. "
+                                f"Movido para '{self.REQUISICOES_NAO_ENVIADAS_DIR}'."
+                            )
+                        else:
+                            logging.error(
+                                f"✗ Falha definitiva: {nome_arquivo} (tag: {tag_falha}) "
+                                f"não foi enviado após {MAX_RETRY} tentativas. "
+                                f"Movido para '{self.REQUISICOES_NAO_ENVIADAS_DIR}'."
+                            )
                         try:
                             shutil.move(caminho_origem, caminho_nao_enviado)
                             self._contar_envio_na_queda(enviado=False)

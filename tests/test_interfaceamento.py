@@ -25,7 +25,7 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RAIZ)
 
 from Coagmaster.coagmaster import AnalisadorCoagmaster
-from bh5100.bh5100 import AnalisadorBH5100
+from bh5100.bh5100 import AnalisadorBH5100, SB, EB, CR
 from mek7300.mek7300 import AnalisadorMEK7300
 from pkl.pkl import AnalisadorPKL125
 from shared import base_analisador
@@ -638,6 +638,69 @@ class TestGerados(BaseTeste):
         analisador._health.start.side_effect = OSError("porta em uso")
 
         analisador._start_health_server()
+
+
+class TestParsingBH5100(BaseTeste):
+    """detect_complete_message: robustez do parsing serial HL7 (SB...EB+CR)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.analisador = self.criar("bh5100")
+
+    def _frame(self, corpo: str) -> str:
+        return SB + corpo + EB + CR
+
+    def test_frame_completo_normal(self) -> None:
+        frame = self._frame("MSH|...")
+        mensagem, resto = self.analisador.detect_complete_message(frame)
+        self.assertEqual(mensagem, frame)
+        self.assertEqual(resto, "")
+
+    def test_eb_orfao_antes_do_sb_nao_lanca(self) -> None:
+        # Regressão do bug: EB órfão (resto de frame partido numa queda da COM)
+        # antes do SB fazia buffer.index(EB, start) estourar ValueError.
+        frame = self._frame("MSH|valido")
+        buffer = "lixo" + EB + frame
+        try:
+            mensagem, resto = self.analisador.detect_complete_message(buffer)
+        except ValueError:
+            self.fail("detect_complete_message não deve lançar ValueError")
+        self.assertEqual(mensagem, frame)
+        self.assertEqual(resto, "")
+
+    def test_lixo_antes_do_sb_e_descartado(self) -> None:
+        frame = self._frame("MSH|x")
+        mensagem, _ = self.analisador.detect_complete_message("ruido123" + frame)
+        self.assertEqual(mensagem, frame)
+
+    def test_sb_sem_eb_aguarda(self) -> None:
+        parcial = SB + "MSH|incompleto"
+        mensagem, resto = self.analisador.detect_complete_message(parcial)
+        self.assertIsNone(mensagem)
+        self.assertEqual(resto, parcial)
+
+    def test_sem_sb_descarta_e_aguarda(self) -> None:
+        mensagem, resto = self.analisador.detect_complete_message("so lixo sem inicio")
+        self.assertIsNone(mensagem)
+        self.assertEqual(resto, "")
+
+    def test_duas_mensagens_coladas(self) -> None:
+        f1 = self._frame("MSH|um")
+        f2 = self._frame("MSH|dois")
+        m1, resto = self.analisador.detect_complete_message(f1 + f2)
+        self.assertEqual(m1, f1)
+        m2, resto = self.analisador.detect_complete_message(resto)
+        self.assertEqual(m2, f2)
+        self.assertEqual(resto, "")
+
+    def test_eb_sem_cr_descarta_frame_invalido(self) -> None:
+        # EB seguido de algo que não é CR: frame inválido, descartado; o frame
+        # válido seguinte ainda é extraído.
+        frame = self._frame("MSH|bom")
+        buffer = SB + "quebrado" + EB + "X" + frame
+        mensagem, resto = self.analisador.detect_complete_message(buffer)
+        self.assertEqual(mensagem, frame)
+        self.assertEqual(resto, "")
 
 
 if __name__ == "__main__":

@@ -266,18 +266,34 @@ class AnalisadorBH5100(BaseAnalisador):
         """
         Detecta mensagem HL7 completa delimitada por SB e EB+CR.
         Retorna (mensagem, buffer_restante) ou (None, buffer).
+
+        Usa str.find (devolve -1, não lança) em vez de str.index: um EB órfão
+        antes do SB (frame parcial/ruído deixado por uma queda da serial) fazia
+        buffer.index(EB, start) estourar ValueError, e o loop serial ficava
+        preso reprocessando o mesmo lixo. Aqui, lixo antes do SB é descartado e
+        frames inválidos (EB sem CR em seguida) são ignorados.
         """
-        while SB in buffer and EB in buffer:
-            start = buffer.index(SB)
-            end = buffer.index(EB, start)
-            if end + 1 < len(buffer) and buffer[end + 1] == CR:
-                message = buffer[start:end + 2]  # SB...EB+CR
-                buffer = buffer[end + 2:]
-                return message, buffer
-            else:
-                # EB sem CR — aguarda mais dados
-                return None, buffer
-        return None, buffer
+        start = buffer.find(SB)
+        if start == -1:
+            # Sem início de mensagem: descarta eventual lixo e aguarda o SB.
+            return None, ""
+        if start > 0:
+            # Lixo antes do SB (ex.: EB órfão): descarta tudo antes do início.
+            buffer = buffer[start:]
+
+        end = buffer.find(EB)
+        if end == -1:
+            # EB ainda não chegou — aguarda mais dados.
+            return None, buffer
+        if end + 1 >= len(buffer):
+            # EB no fim do buffer — aguarda o byte seguinte (esperado: CR).
+            return None, buffer
+        if buffer[end + 1] == CR:
+            message = buffer[:end + 2]  # SB...EB+CR
+            return message, buffer[end + 2:]
+        # EB presente, mas o byte seguinte não é CR: frame inválido. Descarta
+        # até depois desse EB e tenta de novo no restante.
+        return self.detect_complete_message(buffer[end + 1:])
 
     def generate_ack(self, raw_message: str) -> Optional[bytes]:
         """Gera ACK HL7 para o BH5100."""
