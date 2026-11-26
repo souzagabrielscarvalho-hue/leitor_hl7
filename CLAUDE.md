@@ -82,12 +82,22 @@ Responda, comente o código e escreva commits em português do Brasil.
 - Máquina nova: crie a rota e o teste no lab-apoio (`tests/Feature/Integration<Maquina>Test.php`) junto com o leitor,
   e use essa rota no `webhook_url` do `config_defaults` e do `build/<maquina>/config_*.json`.
 
+### 7. Sempre criar o código para compilar a máquina nova e compilá-la junto às demais
+
+- Ao criar uma máquina nova, crie também o script para compilá-la: adicione `Comandos/build_<maquina>.ps1`
+  (seguindo os existentes), registre a máquina no mapa `$mapa` de `Comandos/_lib_build.ps1` (nome do
+  analisador -> pasta do spec) e inclua-a na lista `$maquinas` de `Comandos/build_todas.ps1`.
+- Assim a máquina nova é compilada tanto sozinha (`build.sh <maquina>`) quanto junto com todas as outras
+  (`build.sh todas`). Toda máquina deve aparecer no build de todas; nunca deixe uma máquina de fora.
+
 ## Testes e build
 
 - Testes (WSL, na raiz): `python3 -m unittest discover -s tests`. O teste de imagem da BH5100 precisa do Pillow
   (sem ele, fica pulado).
 - Os testes usam servidor HTTP, serial e TCP locais; nada sai da máquina.
-- Mudou código de uma máquina: recompile o `.exe` no Windows (`build_all.ps1` ou o `.spec` da máquina) e atualize
-  `build/<maquina>/<maquina>.exe`.
+- Mudou código de uma máquina: recompile o `.exe` e atualize `build/<maquina>/<maquina>.exe`. O build e o
+  envio ficam em `Comandos/` e rodam no terminal do VSCode (WSL): `Comandos/build.sh <maquina|todas>`
+  (chama o PyInstaller no Windows via `powershell.exe`) e `Comandos/enviar.sh <pessoal|ambos>` (git do WSL).
+  O arquivo `codigo` tem os comandos prontos.
 - Manuais em PDF: extraia o texto com
   `python3 -I ~/.claude/tools/pdf/extrair_pdf.py "<arquivo.pdf>" <saida.txt>`.
