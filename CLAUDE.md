@@ -64,7 +64,7 @@ Responda, comente o código e escreva commits em português do Brasil.
 ### 5. Sempre deixar o número da versão
 
 - A versão é uma só para todos os leitores, em `shared/versao.py` (`VERSAO`), no formato MAJOR.MINOR.PATCH. A atual
-  é **7.1.0**.
+  é **7.2.0**.
 - Toda mudança que gera `.exe` novo sobe a versão (MAJOR: muda a instalação, como config, rota ou protocolo;
   MINOR: função nova; PATCH: correção) e ganha uma entrada no `CHANGELOG.md`.
 - A versão aparece na abertura do log (`Analisador <MAQUINA> - Serviço de Integração - versão X.Y.Z`) e no

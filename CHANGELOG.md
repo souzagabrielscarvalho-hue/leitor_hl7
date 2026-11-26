@@ -3,6 +3,14 @@
 Versão única para todos os leitores, definida em `shared/versao.py`. Ela aparece na abertura do
 `analisador_<maquina>.log` e no `GET /health`.
 
+## 7.2.0 - 2026-11-26
+
+- Modo TCP opcional na BH5100 (`"modo": "tcp"`, porta padrão 5100); default continua serial.
+  Em TCP a máquina é o cliente e o leitor (PC) é o servidor, como na CA-150 e na URIT-8021,
+  tirando o cabo serial da jogada (fim das quedas de COM por suspensão de USB). O ACK^R01 passa
+  a sair pela conexão ativa nos dois modos. Queda de conexão TCP segue a mesma regra: espera
+  `gerados/` ser enviada antes do popup e do encerramento.
+
 ## 7.1.1 - 2026-11-26
 
 - BH5100: corrige o `ValueError: substring not found` no parsing serial (`detect_complete_message`).

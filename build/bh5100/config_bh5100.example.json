@@ -1,6 +1,9 @@
 {
+    "modo": "serial",
     "com_port": "COM7",
     "baud_rate": 9600,
+    "tcp_host": "0.0.0.0",
+    "tcp_port": 5100,
     "franchise_credential_id": "COLE_O_UUID_DA_UNIDADE",
     "webhook_url": "https://apoio.internal.vidaexame.com/api/integration/bh5100?franchise_credential_id={franchise_credential_id}",
     "exam_images_url": "https://apoio.internal.vidaexame.com/api/integration/images",

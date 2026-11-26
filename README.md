@@ -6,7 +6,7 @@ Sistema de integração para leitura de dados de analisadores laboratoriais via 
 
 | Analisador | Pasta | Protocolo | Porta Padrão |
 |---|---|---|---|
-| **BH5100** (Mindray) | `bh5100/` | HL7 via serial | COM3 |
+| **BH5100** (Mindray) | `bh5100/` | HL7 via serial (ou TCP/IP, opcional) | COM3 / TCP 5100 |
 | **CA-150** (URIT) | `ca150/` | HL7 via TCP/IP (a máquina não tem serial), com consulta por etiqueta | TCP 5150 |
 | **Coagmaster** (Teco) | `Coagmaster/` | Log proprietário via serial | COM4 |
 | **MEK7300** (Nihon Kohden) | `mek7300/` | Texto proprietário via serial | COM4 |
@@ -130,6 +130,25 @@ Para um tipo novo (`vidas1600`, `mek7300`, ...), acrescente o tipo em `config/ex
 Se o token estiver vazio, o hemograma continua sendo enviado normalmente e as imagens são ignoradas. A conversão BMP → PNG usa Pillow (`pip install pillow`).
 
 Se o `exam_images_url` apontar para o lab-apoio local (ex.: `http://192.168.176.17:8039/api/integration/images`), verifique se o endpoint do S3/MinIO é alcançável pelo PC Windows. Em producao AWS, nao defina `EXAM_IMAGES_ENDPOINT` (usa o endpoint padrao da AWS).
+
+## BH5100 por rede (modo TCP, opcional)
+
+O BH5100 funciona por serial (default) ou por rede. Para tirar o cabo serial da jogada (as quedas de COM por suspensão de USB somem), ligue a máquina por TCP/IP. Como na CA-150 e na URIT-8021A, **a máquina é o cliente e o `bh5100.exe` é o servidor**: o leitor escuta em `tcp_host:tcp_port` e a máquina conecta no IP do PC.
+
+No `config_bh5100.json`, ao lado do `.exe`:
+
+```jsonc
+{
+    "modo": "tcp",             // default é "serial"; só a unidade por rede troca para "tcp"
+    "tcp_host": "0.0.0.0",     // escuta em todas as interfaces do PC
+    "tcp_port": 5100           // porta = número da máquina (liberar no Firewall do Windows)
+    // com_port/baud_rate continuam no config e valem quando "modo": "serial"
+}
+```
+
+Na BH5100 (Mindray), no menu de comunicação/LIS do equipamento: tipo de conexão Ethernet/TCP (LIS), protocolo HL7, IP do host = IP do PC, porta = 5100. Reserve o IP do PC por MAC no roteador (se o DHCP mudar o IP, a máquina perde a conexão).
+
+No modo TCP, uma conexão nova da máquina substitui a anterior. Se a máquina desconectar e não voltar em 5 minutos, vale a mesma regra da queda da COM: o programa envia `gerados/`, mostra o popup e encerra. Antes da primeira conexão não conta como queda. O ACK^R01 sai pela conexão ativa nos dois modos. Health check em `http://localhost:8080/health`.
 
 ## Envio de HL7 de teste (`envio_com`)
 

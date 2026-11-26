@@ -14,7 +14,13 @@ param([string]$Mensagem = "")
 $ErrorActionPreference = "Stop"
 $Distro = "Ubuntu"
 
-$posix = (& wsl -d $Distro wslpath -a "$PSScriptRoot").Trim()
+# Caminho deste script em POSIX (WSL). Para UNC \\wsl.localhost\<distro>\... o
+# wslpath falha, entao convertemos a mao; senao usamos wslpath (ex.: C:\ -> /mnt/c).
+if ($PSScriptRoot -match '^\\\\wsl(?:\.localhost|\$)\\[^\\]+\\(.*)$') {
+    $posix = '/' + ($matches[1] -replace '\\', '/')
+} else {
+    $posix = (& wsl -d $Distro wslpath -a "$PSScriptRoot").Trim()
+}
 
 & wsl -d $Distro bash "$posix/_enviar_pessoal.sh" "$Mensagem"
 if ($LASTEXITCODE -ne 0) {
