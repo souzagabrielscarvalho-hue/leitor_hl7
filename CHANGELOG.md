@@ -70,7 +70,7 @@ Versão única para todos os leitores, definida em `shared/versao.py`. Ela apare
   zero). Mostra o tempo de cada exe.
 - Releases: `Comandos/release.sh` confere VERSAO, CHANGELOG e o commit já enviado e cria a tag `vX.Y.Z` no
   repositório pessoal; o workflow `.github/workflows/release.yml` roda os testes, compila o `leitor.exe` no Windows,
-  confere que ele abre e publica a release com o `leitor.exe` e o `leitor.exe.sha256`, de onde o painel das unidades
+  confere que ele abre e publica a release só com o `leitor.exe` (SHA-256 no `digest` do anexo e no texto), de onde o painel das unidades
   atualiza. `.github/` não vai para a empresa.
 
 ## 7.3.0 - 2026-11-27

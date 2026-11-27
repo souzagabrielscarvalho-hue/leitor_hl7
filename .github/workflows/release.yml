@@ -1,7 +1,8 @@
 # Release do leitor universal: ao receber uma tag vX.Y.Z (Comandos/release.sh),
 # roda os testes, compila o leitor.exe no Windows, confere que ele abre e
-# publica a release com o leitor.exe e o leitor.exe.sha256. O painel das
-# unidades baixa daqui (shared/painel/atualizacao.py) e exige o SHA-256.
+# publica a release só com o leitor.exe. O painel das unidades baixa daqui
+# (shared/painel/atualizacao.py) e confere o SHA-256 que o GitHub publica no
+# anexo (campo "digest"); o hash também vai no texto da release.
 #
 # Teste em branch: push em qualquer branch fora da main (ou pull request) faz o
 # mesmo, menos publicar: o leitor.exe fica para baixar em "Artifacts" na página
@@ -60,11 +61,11 @@ jobs:
         run: |
           $p = Start-Process -FilePath universal\dist\leitor.exe -ArgumentList "--maquina", "inexistente" -Wait -PassThru
           if ($p.ExitCode -ne 2) { Write-Error "leitor.exe saiu com $($p.ExitCode) (esperado 2)"; exit 1 }
-      - name: SHA-256
+      - name: SHA-256 (vai no texto da release)
         run: |
           Copy-Item universal\dist\leitor.exe leitor.exe
           $hash = (Get-FileHash leitor.exe -Algorithm SHA256).Hash.ToLower()
-          [IO.File]::WriteAllText("leitor.exe.sha256", "$hash  leitor.exe`n")
+          Add-Content -Path notas.md -Encoding utf8 -Value "`n---`nSHA-256 do leitor.exe: ``$hash``"
           Write-Host "SHA-256: $hash"
       - name: leitor.exe para baixar (teste em branch)
         uses: actions/upload-artifact@v4
@@ -72,7 +73,6 @@ jobs:
           name: leitor-${{ github.sha }}
           path: |
             leitor.exe
-            leitor.exe.sha256
             notas.md
           retention-days: 14
       - name: Publica a release
@@ -83,9 +83,9 @@ jobs:
           $tag = $env:GITHUB_REF_NAME
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            # Re-execução do workflow: troca os anexos da release que já existe.
-            gh release upload $tag leitor.exe leitor.exe.sha256 --clobber
+            # Re-execução do workflow: troca o leitor.exe da release que já existe.
+            gh release upload $tag leitor.exe --clobber
           } else {
-            gh release create $tag leitor.exe leitor.exe.sha256 --title $tag.TrimStart("v") --notes-file notas.md --verify-tag
+            gh release create $tag leitor.exe --title $tag.TrimStart("v") --notes-file notas.md --verify-tag
           }
           if ($LASTEXITCODE -ne 0) { exit 1 }

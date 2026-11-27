@@ -128,7 +128,7 @@ Sem hash, o painel abre normalmente, mas não deixa alterar nenhuma configuraç�
 ### Publicar uma versão
 
 As unidades atualizam pelas releases de `souzagabrielscarvalho-hue/leitor_hl7` (`REPOSITORIO` em
-`shared/painel/atualizacao.py`): tag `vX.Y.Z` com os anexos `leitor.exe` e `leitor.exe.sha256`. O `.exe` da release
+`shared/painel/atualizacao.py`): tag `vX.Y.Z` com o anexo `leitor.exe`. O painel confere o SHA-256 que o GitHub publica em cada anexo (`digest`). O `.exe` da release
 não é o do build local: o GitHub Actions compila o dele a partir do commit da tag.
 
 1. **Versão:** suba a `VERSAO` em `shared/versao.py` e escreva a seção `## X.Y.Z` no `CHANGELOG.md`.
@@ -148,7 +148,7 @@ não é o do build local: o GitHub Actions compila o dele a partir do commit da 
    está no GitHub; pede confirmação (`s`) e envia a tag `v<VERSAO>`.
 4. **Acompanhe** em `https://github.com/souzagabrielscarvalho-hue/leitor_hl7/actions`. O workflow
    (`.github/workflows/release.yml`) roda os testes, compila o `leitor.exe` no Windows, confere que ele abre e publica
-   a release com o `leitor.exe`, o `leitor.exe.sha256` e as notas do CHANGELOG. Se falhar, corrija e clique em
+   a release só com o `leitor.exe`, com as notas do CHANGELOG e o SHA-256 no texto (o GitHub também mostra os "Source code" zip/tar.gz, que ele põe em toda release). Se falhar, corrija e clique em
    **Re-run jobs** (os anexos são substituídos).
 
 A partir daí, "Verificar atualização" no painel das unidades encontra a versão nova. Primeira instalação numa

@@ -19,7 +19,7 @@ Responda, comente o código e escreva commits em português do Brasil.
   no `hiddenimports` do `universal/leitor.spec` e precisa expor `MACHINE_ID`, `MACHINE_NAME`, `HEALTH_PORT`,
   `CONFIG_DEFAULTS` e `criar_analisador()` no módulo.
 - Versões novas chegam às unidades pelas releases do GitHub (`REPOSITORIO` em `shared/painel/atualizacao.py`):
-  tag `vX.Y.Z` com os anexos `leitor.exe` e `leitor.exe.sha256` (o painel exige o SHA-256). A tag sai do
+  tag `vX.Y.Z` com o anexo `leitor.exe` (o painel exige o SHA-256: o do campo `digest` que o GitHub publica). A tag sai do
   `Comandos/release.sh` e o `.github/workflows/release.yml` compila e publica. Publicar é externo e só com pedido
   do usuário.
 - Toda máquina aceita serial ou TCP (`"modo"`, `tcp_host`, `tcp_port` no config). O TCP genérico está em
