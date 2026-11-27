@@ -19,12 +19,23 @@ import sys
 from typing import Any, Dict, Tuple
 
 # Só existem no config da máquina que as declara nos defaults: máquina sem
-# imagem não ganha chave de token, só o PKL tem pkl_machine_id e só a CA-150
-# e a URIT-8021A têm as chaves de TCP e da consulta por etiqueta.
+# imagem não ganha chave de token e só o PKL tem pkl_machine_id. As chaves de
+# conexão TCP (modo, tcp_host, tcp_port) valem para todas desde a 7.3.0.
 CHAVES_OPCIONAIS = (
     "pkl_machine_id", "exam_images_url", "exam_images_machine_token",
     "modo", "tcp_host", "tcp_port", "consult_url",
 )
+
+
+VARIAVEL_PASTA_CONFIG = "LEITOR_HL7_CONFIG_DIR"
+# Pasta raiz escolhida no painel do leitor universal: as pastas de trabalho
+# (Analisador<MAQUINA>) ficam nela em vez da Área de Trabalho.
+VARIAVEL_PASTA_DADOS = "LEITOR_HL7_DADOS_DIR"
+
+
+def pasta_dados() -> str:
+    """Onde ficam as pastas Analisador<MAQUINA>: a pasta raiz, se definida; senão a Área de Trabalho."""
+    return os.environ.get(VARIAVEL_PASTA_DADOS) or os.path.join(os.path.expanduser("~"), "Desktop")
 
 
 def _get_app_dir(analisador_nome: str) -> str:
@@ -33,7 +44,19 @@ def _get_app_dir(analisador_nome: str) -> str:
     Quando congelado (PyInstaller), usa sys.executable.
     Em desenvolvimento, usa __file__ do script chamador.
     """
+    # Leitor universal: o painel abre cada máquina com a pasta do config dela
+    # (escolhida em "Adicionar equipamento"). Sem a variável, nada muda.
+    pasta_painel = os.environ.get(VARIAVEL_PASTA_CONFIG)
+    if pasta_painel:
+        return pasta_painel
     if getattr(sys, 'frozen', False):
+        if not sys.platform.startswith('win'):
+            # Linux empacotado (AppImage é só leitura; /opt não é do usuário):
+            # configs em ~/.config/leitor-hl7. No Windows nada muda.
+            base = os.environ.get('XDG_CONFIG_HOME') or os.path.join(os.path.expanduser('~'), '.config')
+            pasta = os.path.join(base, 'leitor-hl7')
+            os.makedirs(pasta, exist_ok=True)
+            return pasta
         # Rodando como executável PyInstaller
         return os.path.dirname(sys.executable)
     else:

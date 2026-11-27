@@ -3,6 +3,9 @@
 # Gera o .exe de TODAS as maquinas
 /home/gabriel/Vida-Exame/leitor_hl7/Comandos/build.sh todas
 
+# Gera o leitor.exe (leitor universal: painel + todas as maquinas)
+/home/gabriel/Vida-Exame/leitor_hl7/Comandos/build.sh leitor
+
 # Gera o .exe de UMA maquina (troque o nome no final)
 /home/gabriel/Vida-Exame/leitor_hl7/Comandos/build.sh bh5100
 /home/gabriel/Vida-Exame/leitor_hl7/Comandos/build.sh ca150
@@ -17,3 +20,7 @@
 
 # Envia tudo para o PESSOAL e a EMPRESA
 /home/gabriel/Vida-Exame/leitor_hl7/Comandos/enviar.sh ambos
+
+# Publica a VERSAO atual nas releases (as unidades atualizam pelo painel).
+# Antes: VERSAO + CHANGELOG, e o codigo ja enviado com enviar.sh.
+/home/gabriel/Vida-Exame/leitor_hl7/Comandos/release.sh

@@ -1,5 +1,5 @@
 ﻿"""
-Analisador VIDAS 1600 — Integração HL7 via porta serial (bioquímico).
+Analisador VIDAS 1600 — Integração HL7 via porta serial ou TCP (bioquímico).
 
 Herda de BaseAnalisador e implementa apenas os hooks específicos
 do protocolo HL7/MLLP do equipamento VIDAS 1600 (bioMérieux E-LAB).
@@ -377,19 +377,36 @@ class AnalisadorVIDAS1600(BaseAnalisador):
 # ═══════════════════════════════════════════════════════════
 # PONTO DE ENTRADA
 # ═══════════════════════════════════════════════════════════
+# Lidos também pelo leitor universal (universal/leitor.py), que abre a máquina
+# com "leitor.exe --maquina vidas1600" e mostra o config no painel.
+
+MACHINE_ID = 'vidas1600'
+MACHINE_NAME = 'VIDAS1600'
+HEALTH_PORT = 8084
+CONFIG_DEFAULTS = {
+    # Conexão: "serial" (COM) ou "tcp" (a máquina conecta neste PC em tcp_host:tcp_port).
+    'modo': 'serial',
+    'com_port': 'COM5',
+    'baud_rate': 9600,
+    'tcp_host': '0.0.0.0',
+    'tcp_port': 5160,
+    'franchise_credential_id': '85361c80-1a2b-3c4d-5e6f-7a8b9c0d1e2f',
+    'webhook_url': (
+        'https://apoio.internal.vidaexame.com/api/integration/vidas1600'
+        '?franchise_credential_id={franchise_credential_id}'
+    ),
+}
+
+
+def criar_analisador() -> AnalisadorVIDAS1600:
+    """Analisador com a configuração de produção (config_vidas1600.json ao lado do .exe)."""
+    return AnalisadorVIDAS1600(
+        machine_id=MACHINE_ID,
+        machine_name=MACHINE_NAME,
+        config_defaults=CONFIG_DEFAULTS,
+        health_port=HEALTH_PORT,
+    )
+
 
 if __name__ == "__main__":
-    AnalisadorVIDAS1600(
-        machine_id='vidas1600',
-        machine_name='VIDAS1600',
-        config_defaults={
-            'com_port': 'COM5',
-            'baud_rate': 9600,
-            'franchise_credential_id': '85361c80-1a2b-3c4d-5e6f-7a8b9c0d1e2f',
-            'webhook_url': (
-                'https://apoio.internal.vidaexame.com/api/integration/vidas1600'
-                '?franchise_credential_id={franchise_credential_id}'
-            ),
-        },
-        health_port=8084,
-    ).start()
+    criar_analisador().start()

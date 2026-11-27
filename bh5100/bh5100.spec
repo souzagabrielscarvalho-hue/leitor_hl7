@@ -18,6 +18,7 @@ a = Analysis(
         'shared.base_analisador',
         'shared.exam_images_uploader',
         'shared.health_server',
+        'shared.conexao_tcp',
         'serial',
         'serial.tools',
         'requests',

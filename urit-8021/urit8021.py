@@ -599,6 +599,12 @@ class AnalisadorURIT8021(BaseAnalisador):
             return not self._ja_conectou or self._conexao is not None
         return super()._serial_is_open()
 
+    def _conexao_ativa(self) -> bool:
+        """No /health, em TCP, só conta o software da URIT conectado agora."""
+        if self.MODO == "tcp":
+            return self._conexao is not None
+        return super()._conexao_ativa()
+
     def _nome_conexao(self, maiuscula: bool = False) -> str:
         if self.MODO != "tcp":
             return super()._nome_conexao(maiuscula)
@@ -769,23 +775,36 @@ class AnalisadorURIT8021(BaseAnalisador):
 # ═══════════════════════════════════════════════════════════
 # PONTO DE ENTRADA
 # ═══════════════════════════════════════════════════════════
+# Lidos também pelo leitor universal (universal/leitor.py), que abre a máquina
+# com "leitor.exe --maquina urit8021" e mostra o config no painel.
+
+MACHINE_ID = "urit8021"
+MACHINE_NAME = "URIT8021"
+HEALTH_PORT = 8086
+CONFIG_DEFAULTS = {
+    # O manual HL7 da URIT usa MLLP sobre TCP/IP; "serial" fica disponível.
+    "modo": "tcp",
+    "com_port": "COM7",
+    "baud_rate": 9600,
+    "tcp_host": "0.0.0.0",
+    "tcp_port": 8021,
+    "franchise_credential_id": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+    # Endpoint próprio da máquina no lab-apoio (etiqueta + code/value/unit,
+    # casando com o attribute_code).
+    "webhook_url": f"{URL_BASE}/integration/urit-8021?franchise_credential_id={{franchise_credential_id}}",
+    "consult_url": f"{URL_BASE}/interfacing/tag?franchise_credential_id={{franchise_credential_id}}",
+}
+
+
+def criar_analisador() -> AnalisadorURIT8021:
+    """Analisador com a configuração de produção (config_urit8021.json ao lado do .exe)."""
+    return AnalisadorURIT8021(
+        machine_id=MACHINE_ID,
+        machine_name=MACHINE_NAME,
+        config_defaults=CONFIG_DEFAULTS,
+        health_port=HEALTH_PORT,
+    )
+
 
 if __name__ == "__main__":
-    AnalisadorURIT8021(
-        machine_id="urit8021",
-        machine_name="URIT8021",
-        config_defaults={
-            # O manual HL7 da URIT usa MLLP sobre TCP/IP; "serial" fica disponível.
-            "modo": "tcp",
-            "com_port": "COM7",
-            "baud_rate": 9600,
-            "tcp_host": "0.0.0.0",
-            "tcp_port": 8021,
-            "franchise_credential_id": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
-            # Endpoint próprio da máquina no lab-apoio (etiqueta + code/value/unit,
-            # casando com o attribute_code).
-            "webhook_url": f"{URL_BASE}/integration/urit-8021?franchise_credential_id={{franchise_credential_id}}",
-            "consult_url": f"{URL_BASE}/interfacing/tag?franchise_credential_id={{franchise_credential_id}}",
-        },
-        health_port=8086,
-    ).start()
+    criar_analisador().start()

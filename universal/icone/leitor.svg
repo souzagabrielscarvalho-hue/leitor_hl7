@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Ícone do Leitor HL7: tubo de ensaio (analisador) emitindo o sinal que vai ao sistema. -->
+  <defs>
+    <linearGradient id="fundo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16384A"/>
+      <stop offset="1" stop-color="#0B1E2A"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#fundo)"/>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="none" stroke="#2DD4BF" stroke-opacity="0.35" stroke-width="4"/>
+  <!-- tubo -->
+  <path d="M60 52 H112" stroke="#E6F0F4" stroke-width="12" stroke-linecap="round"/>
+  <path d="M68 52 V172 a18 18 0 0 0 36 0 V52" fill="none" stroke="#E6F0F4" stroke-width="12" stroke-linejoin="round"/>
+  <path d="M80 118 H92 V172 a6 6 0 0 1 -12 0 Z" fill="#2DD4BF"/>
+  <!-- sinal -->
+  <polyline points="118,150 136,150 148,112 162,186 176,96 188,150 198,150" fill="none" stroke="#2DD4BF" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="210" cy="150" r="14" fill="#0B1E2A" stroke="#E6F0F4" stroke-width="10"/>
+</svg>

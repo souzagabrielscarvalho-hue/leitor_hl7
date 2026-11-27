@@ -29,6 +29,7 @@ Uso:
 """
 
 import json
+import os
 import time
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -83,6 +84,8 @@ class HealthServer:
         self._lock = threading.Lock()
         self._stats: Dict[str, Any] = {
             "version": "",
+            # O painel do leitor universal usa o PID para parar a máquina.
+            "pid": os.getpid(),
             "port_open": False,
             "com_port": "",
             "baud_rate": 0,

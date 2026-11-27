@@ -6,6 +6,9 @@
 #   Build-Maquina "<maquina>"
 #
 # Compila no Windows com o PyInstaller e copia o .exe para build\<maquina>\.
+# Velocidade: cada exe tem o proprio cache em build_cache\<nome> (fora do git),
+# reaproveitado no build seguinte (sem --clean). Para compilar do zero, defina
+# LEITOR_BUILD_LIMPO=1 antes (ex.: depois de trocar a versao do Python).
 # Mantenha SOMENTE ASCII: o PowerShell 5.1 le UTF-8 sem BOM como ANSI e
 # corrompe os acentos.
 # =============================================================================
@@ -53,8 +56,12 @@ function Compilar {
     New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 
     $specPath = Join-Path $SpecDir "$Nome.spec"
-    $exeDist  = Join-Path $SpecDir "dist\$Nome.exe"
+    $cache    = Join-Path (Get-ProjectRoot) "build_cache\$Nome"
+    $workDir  = Join-Path $cache "work"
+    $distDir  = Join-Path $cache "dist"
+    $exeDist  = Join-Path $distDir "$Nome.exe"
     $logPath  = Join-Path $logDir "$Nome.log"
+    $inicio   = Get-Date
 
     Write-Host "  -> Compilando $Nome..." -ForegroundColor White -NoNewline
 
@@ -81,11 +88,19 @@ function Compilar {
     # Exe de um build anterior em dist\ nao pode passar por exe novo.
     Remove-Item -Force -ErrorAction SilentlyContinue $exeDist
 
-    # Roda a partir da pasta do spec, para o pathex=['..'] funcionar.
+    $argumentos = @("-m", "PyInstaller", "--noconfirm", "--workpath", $workDir, "--distpath", $distDir, $specPath)
+    if ($env:LEITOR_BUILD_LIMPO -eq "1") { $argumentos += "--clean" }
+
+    # Roda a partir da pasta do spec, para o pathex=['..'] funcionar. Cache de
+    # binarios proprio por exe: builds em paralelo nao disputam o mesmo.
+    $env:PYINSTALLER_CONFIG_DIR = Join-Path $cache "config"
     Push-Location $SpecDir
     try {
-        $r = Invoke-Nativo $python @("-m", "PyInstaller", "--noconfirm", "--clean", $specPath) $logPath
-    } finally { Pop-Location }
+        $r = Invoke-Nativo $python $argumentos $logPath
+    } finally {
+        Pop-Location
+        Remove-Item Env:\PYINSTALLER_CONFIG_DIR -ErrorAction SilentlyContinue
+    }
 
     if ($r.Codigo -ne 0) {
         Write-Host " ERRO" -ForegroundColor Red
@@ -100,13 +115,14 @@ function Compilar {
     if (-not (Test-Path $DestDir)) { New-Item -ItemType Directory -Path $DestDir -Force | Out-Null }
     Copy-Item -Path $exeDist -Destination $DestDir -Force
 
-    # Artefatos temporarios do PyInstaller.
+    # Sobras de builds antigos (antes do build_cache) na pasta do spec.
     foreach ($temp in @("dist", "build")) {
         $c = Join-Path $SpecDir $temp
         if (Test-Path $c) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $c }
     }
 
-    Write-Host " OK" -ForegroundColor Green
+    $segundos = [int]((Get-Date) - $inicio).TotalSeconds
+    Write-Host " OK (${segundos}s)" -ForegroundColor Green
     Write-Host "       $(Join-Path $DestDir "$Nome.exe")" -ForegroundColor DarkGray
 }
 
@@ -115,8 +131,10 @@ function Build-Maquina {
 
     $root = Get-ProjectRoot
 
-    # Nome do analisador -> pasta do spec.
+    # Nome do analisador -> pasta do spec. "leitor" e o leitor universal
+    # (painel + todas as maquinas num exe so), em universal\ -> build\leitor.
     $mapa = @{
+        "leitor"     = "universal"
         "bh5100"     = "bh5100"
         "ca150"      = "ca150"
         "coagmaster" = "Coagmaster"

@@ -1,6 +1,9 @@
 {
+    "modo": "serial",
     "com_port": "COM4",
     "baud_rate": 115200,
+    "tcp_host": "0.0.0.0",
+    "tcp_port": 5200,
     "franchise_credential_id": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
     "webhook_url": "https://apoio.internal.vidaexame.com/api/integration/coagmaster?franchise_credential_id={franchise_credential_id}",
     "webhook_url_teste_local": "http://localhost:8039/api/integration/coagmaster?franchise_credential_id={franchise_credential_id}"

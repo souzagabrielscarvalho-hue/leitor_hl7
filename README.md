@@ -6,12 +6,18 @@ Sistema de integração para leitura de dados de analisadores laboratoriais via 
 
 | Analisador | Pasta | Protocolo | Porta Padrão |
 |---|---|---|---|
-| **BH5100** (Mindray) | `bh5100/` | HL7 via serial (ou TCP/IP, opcional) | COM3 / TCP 5100 |
+| **BH5100** (Mindray) | `bh5100/` | HL7 via serial ou TCP/IP | COM3 / TCP 5100 |
 | **CA-150** (URIT) | `ca150/` | HL7 via TCP/IP (a máquina não tem serial), com consulta por etiqueta | TCP 5150 |
-| **Coagmaster** (Teco) | `Coagmaster/` | Log proprietário via serial | COM4 |
-| **MEK7300** (Nihon Kohden) | `mek7300/` | Texto proprietário via serial | COM4 |
+| **Coagmaster** (Teco) | `Coagmaster/` | Log proprietário via serial ou TCP | COM4 / TCP 5200 |
+| **MEK7300** (Nihon Kohden) | `mek7300/` | Texto proprietário via serial ou TCP | COM5 / TCP 7300 |
+| **PKL 125** | `pkl/` | ASTM E1394 bidirecional via serial ou TCP | COM3 / TCP 5125 |
 | **URIT-8021A** (URIT) | `urit-8021/` | HL7 via TCP/IP (ou serial), com consulta por etiqueta | TCP 8021 |
-| **VIDAS 1600** (bioMérieux) | `vidas1600/` | HL7 via serial | COM5 |
+| **VIDAS 1600** (bioMérieux) | `vidas1600/` | HL7 via serial ou TCP | COM5 / TCP 5160 |
+
+**Serial ou TCP:** toda máquina aceita `"modo": "serial"` (usa `com_port`/`baud_rate`) ou `"modo": "tcp"` no config.
+Em TCP o programa escuta em `tcp_host:tcp_port` (`0.0.0.0` = qualquer placa de rede) e a máquina conecta no IP deste
+PC, como na tela LIS dela; o protocolo é o mesmo da serial. Libere a porta no Firewall do Windows. Configs antigos
+ganham as chaves sozinhos e continuam em `serial`.
 
 > ⚠️ **Importante:** A porta COM de cada analisador **depende de onde o cabo serial/USB foi conectado fisicamente ao PC**. As portas listadas acima são os valores padrão definidos no código-fonte. Para alterar a porta COM de um analisador, edite a variável `COM_PORT` no arquivo `.py` correspondente **antes** de gerar o executável com PyInstaller. No Windows, você pode verificar quais portas COM estão em uso pelo Gerenciador de Dispositivos (Painel de Controle → Gerenciador de Dispositivos → Portas (COM e LPT)).
 
@@ -50,8 +56,8 @@ leitor_hl7/
 │   ├── file_cleanup.py        # Limpeza automática de arquivos
 │   └── health_server.py       # Health check HTTP
 ├── tests/                     # Testes (unittest)
-├── build_all.ps1              # Compila todos os executáveis
-├── enviar.ps1                 # Envia a branch atual para um repositório
+├── Comandos/                  # build.sh, enviar.sh e release.sh (terminal do VSCode/WSL)
+├── .github/workflows/         # release.yml: publica o leitor.exe nas releases
 ├── requirements.txt
 ├── build/                     # Executáveis prontos e seus JSONs de configuração
 │   ├── bh5100/
@@ -70,6 +76,137 @@ leitor_hl7/
 ├── .gitignore
 └── README.md
 ```
+
+## Leitor universal (`leitor.exe`)
+
+Um .exe só para todas as máquinas, com painel próprio. Fica em `build/leitor/leitor.exe`; os .exe de cada máquina
+continuam existindo e funcionando como antes.
+
+- **Abrir o painel:** dois cliques no `leitor.exe`. O painel é uma janela nativa do programa, em Qt (PySide6, Qt
+  Widgets), sem navegador. Abrir de novo só traz para a frente a janela que já está aberta.
+- **Equipamentos:** a lista mostra só as máquinas adicionadas neste computador. "Adicionar equipamento" escolhe o
+  modelo, a pasta do `config_<maquina>.json` e os parâmetros; se a pasta já tiver o arquivo, ele é usado como está
+  (nunca é sobrescrito). Configs que já existem ao lado do `leitor.exe` entram na lista sozinhos. A lista fica em
+  `leitor_painel.json`, ao lado do `leitor.exe`; "Remover da lista" mantém o arquivo.
+- **Por equipamento:** status (conexão, enviados hoje, pendentes em `gerados/`, erros, tempo ligado), formulário do
+  `config_<maquina>.json` (na pasta escolhida ao adicionar), iniciar/parar/reiniciar e o log ao vivo com filtro.
+- **Administrador:** ver, iniciar e parar são livres; alterar a configuração (salvar, adicionar, remover, trocar a
+  porta sugerida) pede a senha mestra. A sessão termina após 15 min sem alterações ou ao fechar o painel.
+- **Configurações** (barra de título): tema claro, escuro ou do sistema; entrar/sair como administrador; pasta raiz
+  do programa; iniciar com o Windows; abrir a pasta do programa; versão e atualização.
+- **Primeira abertura:** um assistente pede a senha de administrador e a pasta raiz (dá para criar uma pasta nova ali
+  mesmo ou não usar pasta raiz). Só aparece enquanto não existir `leitor_raiz.json` ao lado do `leitor.exe`.
+- **Pasta raiz do programa:** uma pasta para configs, `leitor_painel.json`, pastas `Analisador<MAQUINA>` e log do
+  painel (`<raiz>\Painel`). Sem ela, configs ficam ao lado do `leitor.exe` e os dados na Área de Trabalho. Ao trocar,
+  configs e lista são copiados (o que já existir na pasta nova é usado como está) e os exames pendentes de
+  `gerados/` vão junto; o histórico fica na antiga. A escolha fica em `leitor_raiz.json`, ao lado do `leitor.exe`.
+- **Iniciar com o Windows:** o painel abre minimizado ao entrar no Windows (`leitor.exe --ao-ligar`, em
+  `HKCU\...\Run`) e inicia as máquinas com "Iniciar ao ligar" marcado no cabeçalho delas.
+- **Portas seriais:** lista as COM (inclusive virtuais: com0com, VSPE, Eltima) com descrição, fabricante, VID:PID,
+  série e posição USB; mostra o equipamento configurado em cada uma e, em "Verificar disponibilidade", se outro
+  programa está com ela. Se o Windows trocar o número da COM do adaptador de uma máquina, o painel sugere a COM nova.
+- **Cada máquina roda em processo próprio** (`leitor.exe --maquina ca150`), com o mesmo log, `gerados/`, watchdog e
+  popup de queda do .exe dela. Fechar a janela encerra só o painel; as máquinas continuam rodando.
+- Log do painel: `Desktop\LeitorHL7\leitor_painel.log`.
+- **Versão e atualização:** clique na versão (canto inferior direito) → "Sobre esta versão" ou "Verificar
+  atualização". A versão nova vem da última release de `souzagabrielscarvalho-hue/leitor_hl7` (tag `vX.Y.Z`, anexo
+  `leitor.exe`); o download é conferido pelo SHA-256 que o GitHub publica, o atual fica como `leitor.exe.anterior` e o
+  painel reabre na versão nova. As máquinas abertas seguem na versão anterior até serem reiniciadas.
+
+### Senha mestra
+
+A senha de administrador é a mesma em todas as unidades e vai embutida no `leitor.exe` só como hash
+PBKDF2-SHA256, em `HASH_SENHA_MESTRA` (`shared/painel/acesso.py`). O repositório é público: nunca escreva a senha em
+arquivo, commit ou chat, e use 14+ caracteres. Para definir ou trocar (grava só o hash) e depois recompilar:
+
+```bash
+python3 -m shared.painel.acesso
+```
+
+Sem hash, o painel abre normalmente, mas não deixa alterar nenhuma configuração.
+
+### Publicar uma versão
+
+As unidades atualizam pelas releases de `souzagabrielscarvalho-hue/leitor_hl7` (`REPOSITORIO` em
+`shared/painel/atualizacao.py`): tag `vX.Y.Z` com o anexo `leitor.exe`. O painel confere o SHA-256 que o GitHub publica em cada anexo (`digest`). O `.exe` da release
+não é o do build local: o GitHub Actions compila o dele a partir do commit da tag.
+
+1. **Versão:** suba a `VERSAO` em `shared/versao.py` e escreva a seção `## X.Y.Z` no `CHANGELOG.md`.
+2. **Envie o código** para o repositório (terminal do VSCode/WSL):
+
+   ```bash
+   Comandos/enviar.sh pessoal "Versão 7.4.0: ..."
+   ```
+
+3. **Lance a release:**
+
+   ```bash
+   Comandos/release.sh
+   ```
+
+   Ele confere se a tag bate com a `VERSAO`, se o CHANGELOG tem a seção, se não há nada sem commit e se o commit já
+   está no GitHub; pede confirmação (`s`) e envia a tag `v<VERSAO>`.
+4. **Acompanhe** em `https://github.com/souzagabrielscarvalho-hue/leitor_hl7/actions`. O workflow
+   (`.github/workflows/release.yml`) roda os testes, compila o `leitor.exe` no Windows, confere que ele abre e publica
+   a release só com o `leitor.exe`, com as notas do CHANGELOG e o SHA-256 no texto (o GitHub também mostra os "Source code" zip/tar.gz, que ele põe em toda release). Se falhar, corrija e clique em
+   **Re-run jobs** (os anexos são substituídos).
+
+A partir daí, "Verificar atualização" no painel das unidades encontra a versão nova. Primeira instalação numa
+unidade: `https://github.com/souzagabrielscarvalho-hue/leitor_hl7/releases/latest/download/leitor.exe`.
+
+**Testar sem publicar:** todo push numa branch fora da `main` (e todo pull request) roda o mesmo workflow, menos a
+publicação. Na página da execução (*Actions*), o `leitor.exe` fica em **Artifacts** por 14 dias para baixar e testar.
+Para testar também a publicação, envie uma tag `v<VERSAO>` para um **fork**: a release sai no fork, e as unidades
+continuam lendo só o repositório de `REPOSITORIO`. Num fork, o Actions vem desligado: ative na aba *Actions*.
+
+**Antes da primeira release:**
+
+- O `.github/workflows/release.yml` precisa estar no commit da tag: só tag enviada depois dele no GitHub dispara o
+  build.
+- O `release.sh` e o `enviar.sh` empurram direto para `souzagabrielscarvalho-hue/leitor_hl7`: o git de quem roda
+  precisa ter permissão de push lá. De um fork, o caminho é o pull request.
+- O repositório precisa permitir Actions com escrita. Se a publicação falhar por permissão: Settings > Actions >
+  General > Workflow permissions > "Read and write permissions".
+
+Sem WSL, dá para criar a tag à mão (sem as conferências do `release.sh`):
+
+```bash
+git tag -a v7.4.0 -m "Leitor HL7 7.4.0"
+git push https://github.com/souzagabrielscarvalho-hue/leitor_hl7.git refs/tags/v7.4.0
+```
+
+### Linux
+
+`./linux/build_linux.sh` (precisa de podman ou docker) compila no container `manylinux_2_34` e gera em
+`build/linux/` pacotes para Ubuntu 22.04+, Debian 12+, RHEL/Alma/Rocky 9+ e Fedora:
+
+| Pacote | Instalação | Atualização |
+|---|---|---|
+| `leitor-hl7-<versão>-x86_64.AppImage` | `chmod +x` e abrir | pelo painel |
+| `leitor-hl7_<versão>_amd64.deb` | `sudo apt install ./leitor-hl7_*.deb` | pacote novo |
+| `leitor-hl7-<versão>-1.x86_64.rpm` | `sudo dnf install ./leitor-hl7-*.rpm` | pacote novo |
+| `leitor-hl7-<versão>-linux-x86_64.tar.gz` | extrair e rodar `leitor-hl7/leitor-hl7` | pacote novo |
+
+No Linux empacotado os configs ficam em `~/.config/leitor-hl7`, o log e `gerados/` em `~/Desktop/Analisador<MAQUINA>`,
+e o usuário precisa estar no grupo `dialout` para abrir as portas seriais. O popup de queda usa o zenity ou o
+kdialog.
+
+Desenvolvimento:
+
+```bash
+# janela do painel (precisa do PySide6: pip install -r requirements.txt)
+python3 universal/leitor.py
+
+# uma máquina, como o .exe dela
+python3 universal/leitor.py --maquina ca150
+```
+
+Código: `shared/painel/nucleo.py` (o que a janela faz, sem Qt), `janela.py`, `janela_versao.py` e `tema.py`
+(interface), `atualizacao.py`, `config.py`, `processos.py` e `portas.py`. Ícone: `universal/icone/leitor.svg` (o `leitor.ico` é gerado dele).
+
+Máquina nova no leitor universal: registrar em `shared/maquinas.py`, acrescentar ao `hiddenimports` de
+`universal/leitor.spec` e expor no módulo `MACHINE_ID`, `MACHINE_NAME`, `HEALTH_PORT`, `CONFIG_DEFAULTS` e
+`criar_analisador()`.
 
 ## Funcionamento
 
@@ -253,7 +390,7 @@ No TCP valem as mesmas regras da CA-150: uma conexão nova substitui a anterior,
 
 ## Queda da conexão COM
 
-Vale para `bh5100`, `ca150` (serial e TCP), `coagmaster`, `mek7300`, `pkl`, `urit8021` (serial e TCP) e `vidas1600`. O envio de resultados e imagens roda em uma thread separada da leitura serial, então continua com a COM caída.
+Vale para todas as máquinas, em serial e em TCP. Em TCP, antes da primeira conexão da máquina não conta como queda, e uma conexão nova que substitui a anterior também não. O envio de resultados e imagens roda em uma thread separada da leitura serial, então continua com a COM caída.
 
 1. Enquanto a porta está caída, o programa tenta reconectar e segue enviando o que estiver em `gerados/`. Se a porta voltar em até 5 minutos, nada muda para o usuário.
 2. Depois de 5 minutos sem conexão, ele encerra assim que `gerados/` esvaziar.
@@ -265,30 +402,60 @@ Arquivos que falharam vão para `requisições não enviadas/` e não são reenv
 
 ## Build
 
-```powershell
-cd c:\repositorio\leitor_hl7
-powershell -ExecutionPolicy Bypass -File .\build_all.ps1
-```
+O build roda no Windows (PyInstaller). Dá para disparar pelo terminal do VSCode (WSL), como no arquivo `codigo`, ou
+direto pelo PowerShell do Windows. O `.exe` vai para `build\<alvo>\` (ex.: `build\leitor\leitor.exe`) e a saída do
+PyInstaller para `build_logs\<alvo>.log`.
 
-O comando compila o código que está na branch atual do clone: confira a branch e o commit que ele mostra no início.
+### Uma vez por PC
 
-- **Antes de compilar:** instala o que faltar de `requirements.txt` no `venv` e confere se cada analisador importa. Falha aqui interrompe o build.
-- **Executáveis:** `bh5100`, `ca150`, `coagmaster`, `mek7300`, `pkl`, `test_get_only`, `urit8021` e `vidas1600`, em `build/<analisador>/`. O `test_get_only.exe` vai para `build/pkl/`.
-- **`envio_com`:** compilado se existir `..\read\envio_com.spec`, copiado para `build/bh5100/`. Sem essa pasta aparece como `PULADO`, sem falhar o build. Não é versionado.
-- **Resultado:** o script mostra uma tabela `OK`/`ERRO`/`PULADO`, grava a saída de cada executável em `build_logs/<nome>.log` e, com qualquer `ERRO`, sai com código 1 sem commitar.
-- **Commit:** feito só com todos os executáveis OK, e cancelado se houver token preenchido em arquivo versionado. Use `-SkipGit` para só compilar.
-
-O envio ao GitHub é um comando separado para cada repositório. Ele envia a branch atual, e recusa se houver alteração sem commit ou token preenchido:
+Crie o venv na raiz do projeto (os scripts usam `venv\Scripts\python.exe`; sem ele, o Python do PATH):
 
 ```powershell
-# Vida-Exames/HL7_integrator
-powershell -ExecutionPolicy Bypass -File .\enviar.ps1 empresa
-
-# souzagabrielscarvalho-hue/leitor_hl7 (repositório PÚBLICO)
-powershell -ExecutionPolicy Bypass -File .\enviar.ps1 pessoal
+cd C:\caminho\do\leitor_hl7
+python -m venv venv
+venv\Scripts\pip install -r requirements.txt
 ```
 
-O `build/bh5100/config_bh5100.json` tem o token da máquina e não é versionado. Em um PC novo, crie-o a partir de `config_bh5100.example.json`.
+### Pelo terminal do VSCode (WSL)
+
+O `build.sh` chama o PowerShell do Windows por você:
+
+```bash
+Comandos/build.sh leitor                        # só o leitor.exe (leitor universal) -> build/leitor/
+Comandos/build.sh ca150                         # uma máquina -> build/ca150/
+Comandos/build.sh todas                         # leitor.exe e todas as máquinas
+LEITOR_BUILD_LIMPO=1 Comandos/build.sh todas    # descarta o cache e compila do zero
+```
+
+Alvos: `leitor`, `bh5100`, `ca150`, `coagmaster`, `mek7300`, `pkl`, `urit8021`, `vidas1600` e `todas`.
+
+### Direto no PowerShell (sem WSL)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Comandos\build_leitor.ps1   # só o leitor.exe
+powershell -ExecutionPolicy Bypass -File .\Comandos\build_todas.ps1    # todas
+powershell -ExecutionPolicy Bypass -File .\Comandos\build_ca150.ps1    # uma máquina
+
+$env:LEITOR_BUILD_LIMPO = "1"    # antes do comando, para compilar do zero
+```
+
+### Como funciona
+
+- **Velocidade:** cada exe tem cache próprio do PyInstaller em `build_cache\<nome>` (fora do git), reaproveitado no
+  build seguinte; o tempo de cada um aparece no resultado. Use `LEITOR_BUILD_LIMPO=1` se o build sair estranho, por
+  exemplo depois de trocar o Python.
+- **Antes de compilar:** cada alvo confere se o módulo importa (o PyInstaller compila mesmo faltando um módulo, e o
+  exe quebraria ao abrir).
+- **Executáveis:** `leitor`, `bh5100`, `ca150`, `coagmaster`, `mek7300`, `pkl`, `test_get_only`, `urit8021` e
+  `vidas1600` (o `test_get_only.exe` vai para `build/pkl/`). Máquina nova ganha o `Comandos/build_<maquina>.ps1` e
+  entra no `build_todas.ps1` (regra 7 do CLAUDE.md).
+
+### Envio
+
+O envio é separado: `Comandos/enviar.sh pessoal` (repositório público `souzagabrielscarvalho-hue/leitor_hl7`) ou
+`Comandos/enviar.sh ambos` (também o `Vida-Exames/HL7_integrator`). Ele commita, recusa token preenchido e envia a
+branch atual. Para lançar uma versão do `leitor.exe` para as unidades, veja
+[Publicar uma versão](#publicar-uma-versão).
 
 ## Testes no ambiente local
 
@@ -337,7 +504,7 @@ Os analisadores criam as seguintes pastas na Área de Trabalho do usuário:
 
 ## Requisitos
 
-Python 3.13+ e as dependências de `requirements.txt` (o `build_all.ps1` instala o que faltar):
+Python 3.12+ e as dependências de `requirements.txt` (`pip install -r requirements.txt` no venv do Windows):
 
 - `pyserial`
 - `requests`
