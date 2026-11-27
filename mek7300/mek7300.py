@@ -1,5 +1,5 @@
 ﻿"""
-Analisador MEK7300 — Integração via porta serial (protocolo delimitado por ETX).
+Analisador MEK7300 — Integração via porta serial ou TCP (protocolo delimitado por ETX).
 
 Herda de BaseAnalisador com SerialListener e keepalive ativados.
 Implementa apenas os hooks específicos do protocolo do MEK7300.
@@ -323,21 +323,38 @@ class AnalisadorMEK7300(BaseAnalisador):
 # ═══════════════════════════════════════════════════════════
 # PONTO DE ENTRADA
 # ═══════════════════════════════════════════════════════════
+# Lidos também pelo leitor universal (universal/leitor.py), que abre a máquina
+# com "leitor.exe --maquina mek7300" e mostra o config no painel.
 
-if __name__ == "__main__":
-    AnalisadorMEK7300(
-        machine_id='mek7300',
-        machine_name='MEK7300',
-        config_defaults={
-            'com_port': 'COM5',
-            'baud_rate': 9600,
-            'franchise_credential_id': '88cf9273-5044-47f4-b8f6-01160345a190',
-            'webhook_url': (
-                'https://apoio.internal.vidaexame.com/api/integration/mek7300/v2'
-                '?franchise_credential_id={franchise_credential_id}'
-            ),
-        },
-        health_port=8082,
+MACHINE_ID = 'mek7300'
+MACHINE_NAME = 'MEK7300'
+HEALTH_PORT = 8082
+CONFIG_DEFAULTS = {
+    # Conexão: "serial" (COM) ou "tcp" (a máquina conecta neste PC em tcp_host:tcp_port).
+    'modo': 'serial',
+    'com_port': 'COM5',
+    'baud_rate': 9600,
+    'tcp_host': '0.0.0.0',
+    'tcp_port': 7300,
+    'franchise_credential_id': '88cf9273-5044-47f4-b8f6-01160345a190',
+    'webhook_url': (
+        'https://apoio.internal.vidaexame.com/api/integration/mek7300/v2'
+        '?franchise_credential_id={franchise_credential_id}'
+    ),
+}
+
+
+def criar_analisador() -> AnalisadorMEK7300:
+    """Analisador com a configuração de produção (config_mek7300.json ao lado do .exe)."""
+    return AnalisadorMEK7300(
+        machine_id=MACHINE_ID,
+        machine_name=MACHINE_NAME,
+        config_defaults=CONFIG_DEFAULTS,
+        health_port=HEALTH_PORT,
         use_serial_listener=True,
         enable_keepalive=True,
-    ).start()
+    )
+
+
+if __name__ == "__main__":
+    criar_analisador().start()

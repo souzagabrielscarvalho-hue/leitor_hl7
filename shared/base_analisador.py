@@ -8,6 +8,9 @@ Centraliza:
 - Servidor HTTP de health check
 - SerialListener com keepalive (opcional)
 - Loop serial simples (opcional)
+- Modo TCP para qualquer máquina ("modo": "tcp" no config): o programa escuta
+  em tcp_host:tcp_port e a máquina conecta (shared/conexao_tcp.py). Os mesmos
+  laços seriais leem a conexão TCP, então o protocolo não muda.
 - Utilitários compartilhados (format_thousands, extrair_imagens_de_hl7)
 
 Cada máquina herda e implementa APENAS os hooks específicos do protocolo:
@@ -35,7 +38,9 @@ import requests
 
 # Import dos módulos compartilhados
 from shared.file_cleanup import FileCleanupConfig, start_cleanup_thread
-from shared.config_loader import load_config
+from shared.config_loader import load_config, pasta_dados
+from shared import conexao_tcp
+from shared.conexao_tcp import ConexaoTCPEncerrada, PortaTCP
 from shared.health_server import HealthServer
 from shared.versao import VERSAO
 
@@ -243,8 +248,11 @@ class SerialListener:
         retry_interval_startup: int = STARTUP_RETRY_INTERVAL,
         retry_interval_runtime: int = RECONNECT_INTERVAL,
         on_serial_error: Optional[Callable[[BaseException, bool], None]] = None,
+        abrir: Optional[Callable[[], Any]] = None,
     ) -> None:
         self.port_name = port_name
+        # Abre a "porta": serial.Serial por padrão; em TCP, espera a máquina conectar.
+        self._abrir = abrir or (lambda: serial.Serial(self.port_name, self.baud_rate, timeout=0.1))
         self.baud_rate = baud_rate
         self._detect_complete_message = detect_complete_message
         self._on_message = on_message
@@ -285,7 +293,7 @@ class SerialListener:
         if self.is_port_open:
             return True
         try:
-            self._serial_port = serial.Serial(self.port_name, self.baud_rate, timeout=0.1)
+            self._serial_port = self._abrir()
             logging.info(f"✓ Conectado à porta {self.port_name} com sucesso.")
             self.last_activity = time.time()
             self._ever_connected = True
@@ -367,6 +375,18 @@ class SerialListener:
                             last_activity = time.time()
                     except Exception:
                         pass
+
+            except ConexaoTCPEncerrada as ex:
+                # TCP: a máquina desconectou. Não é erro transitório; reabre (espera reconectar).
+                logging.error(f"✗ Conexão {self.port_name} perdida: {ex}. Aguardando a máquina reconectar.")
+                self._notify_serial_error(ex, False)
+                self._buffer = ""
+                try:
+                    if self._serial_port:
+                        self._serial_port.close()
+                except Exception as close_ex:
+                    logging.error(f"Erro ao fechar a conexão: {close_ex}")
+                self._serial_port = None
 
             except OSError as ex:
                 # ClearCommError: erro transitório do driver serial no Windows.
@@ -484,6 +504,9 @@ class BaseAnalisador:
 
         # Serial listener (opcional)
         self._listener: Optional[SerialListener] = None
+        # Modo TCP: criada no start()
+        self._porta_tcp: Optional[PortaTCP] = None
+        self._popup_aberto = threading.Event()
 
         # Controle de conexão serial (deadline de 5 min sem porta aberta)
         self._last_open_time = time.time()
@@ -501,6 +524,15 @@ class BaseAnalisador:
         self.CONFIG = _config
         self.COM_PORT = _config["com_port"]
         self.BAUD_RATE = _config["baud_rate"]
+        # Conexão com a máquina: "serial" (COM) ou "tcp" (a máquina conecta neste PC).
+        self.MODO = str(_config.get("modo") or "serial").strip().lower()
+        if self.MODO not in ("serial", "tcp"):
+            self.MODO = "serial"
+        self.TCP_HOST = str(_config.get("tcp_host") or "0.0.0.0")
+        try:
+            self.TCP_PORT = int(_config.get("tcp_port") or 0)
+        except (TypeError, ValueError):
+            self.TCP_PORT = 0
         self.FRANCHISE_CREDENTIAL_ID = _config.get("franchise_credential_id", "")
         self.PKL_MACHINE_ID = _config.get("pkl_machine_id", "")
         self.EXAM_IMAGES_URL = _config.get("exam_images_url", "")
@@ -594,8 +626,8 @@ class BaseAnalisador:
             logging.info(f"De-para aplicado no resultado ({tag}): {', '.join(trocados)}.")
 
     def _setup_dirs(self) -> None:
-        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-        self.BASE_DIR = os.path.join(desktop, f"Analisador{self.machine_name}")
+        # Área de Trabalho, ou a pasta raiz escolhida no painel do leitor universal.
+        self.BASE_DIR = os.path.join(pasta_dados(), f"Analisador{self.machine_name}")
         self.GERADOS_DIR = os.path.join(self.BASE_DIR, "gerados")
         self.ENVIADOS_DIR = os.path.join(self.BASE_DIR, "enviados")
         self.REQUISICOES_NAO_ENVIADAS_DIR = os.path.join(
@@ -960,12 +992,32 @@ class BaseAnalisador:
 
     # ── SERIAL ─────────────────────────────────────────────────
 
+    def _em_tcp(self) -> bool:
+        """Modo TCP genérico da base (a CA-150 e a URIT têm o próprio)."""
+        return self.MODO == "tcp"
+
     def _serial_is_open(self) -> bool:
-        """Retorna True se a porta serial estiver aberta (qualquer modo)."""
+        """
+        Retorna True se a porta serial estiver aberta (qualquer modo). Em TCP,
+        enquanto a máquina nunca conectou não é queda (o watchdog não encerra).
+        """
+        if self._em_tcp():
+            porta = self._porta_tcp
+            return porta is None or not porta.ja_conectou or porta.is_open
         if self._use_serial_listener:
             return self._listener is not None and self._listener.is_port_open
         ser = getattr(self, "_serial", None)
         return ser is not None and ser.is_open
+
+    def _conexao_ativa(self) -> bool:
+        """
+        Para o port_open do /health (o painel do leitor universal mostra): a
+        máquina está ligada agora? Diferente de _serial_is_open, que em TCP
+        considera aberto enquanto a máquina nunca conectou.
+        """
+        if self._em_tcp():
+            return self._porta_tcp is not None and self._porta_tcp.is_open
+        return self._serial_is_open()
 
     def _count_pending_files(self) -> int:
         """Quantos arquivos da máquina ainda estão em gerados."""
@@ -1007,7 +1059,7 @@ class BaseAnalisador:
         linhas = [
             f"A conexão com o analisador {self.machine_name} foi perdida.",
             "",
-            f"Porta: {self.COM_PORT}",
+            self._linha_conexao(),
             f"Erro: {erro}",
         ]
         if self._erro_queda and self._erro_reconexao:
@@ -1019,9 +1071,49 @@ class BaseAnalisador:
             f'- não enviados (pasta "requisições não enviadas"): {self._nao_enviados_na_queda}',
             f"- ainda pendentes (serão enviados ao reabrir): {pendentes}",
             "",
-            "O programa será encerrado. Verifique o cabo/porta e abra-o novamente.",
+            "O programa será encerrado. Verifique o cabo/porta e abra-o novamente."
+            if not self._em_tcp() else
+            "O programa será encerrado. Verifique a rede e a configuração LIS da máquina e abra-o novamente.",
         ]
         return "\n".join(linhas)
+
+    def _linha_conexao(self) -> str:
+        if self._em_tcp():
+            endereco = self._porta_tcp.endereco if self._porta_tcp else ""
+            return f"Conexão: TCP, porta {self._porta_tcp_atual()} (máquina: {endereco or 'não informada'})"
+        return f"Porta: {self.COM_PORT}"
+
+    def _porta_tcp_atual(self) -> int:
+        """Porta TCP em uso (com tcp_port 0, a que o sistema escolheu)."""
+        return self._porta_tcp.porta if self._porta_tcp else self.TCP_PORT
+
+    def _popup_sem_travar(self, titulo: str, mensagem: str) -> None:
+        """
+        Popup que não encerra nem trava o programa (abre numa thread própria).
+        Com um aviso já aberto, não empilha outro (fica só no log).
+        """
+        if self._popup_aberto.is_set():
+            logging.info("Aviso já aberto na tela; novo aviso só no log.")
+            return
+        self._popup_aberto.set()
+
+        def _mostrar() -> None:
+            try:
+                self._show_popup(titulo, mensagem)
+            finally:
+                self._popup_aberto.clear()
+
+        Thread(target=_mostrar, daemon=True, name="popup-aviso").start()
+
+    def _avisar_porta_tcp_ocupada(self, erro: OSError) -> None:
+        self._popup_sem_travar(
+            f"Porta ocupada - {self.machine_name}",
+            f"O programa da {self.machine_name} não conseguiu abrir a porta TCP {self._porta_tcp_atual()}.\n\n"
+            f"Erro: {erro}\n\n"
+            f"Provável causa: outro leitor (ou outro programa) já está usando a porta.\n"
+            f"Feche o programa duplicado ou troque a porta TCP no config. "
+            f"Esta janela tenta de novo a cada {conexao_tcp.TCP_RETRY_INTERVAL}s.",
+        )
 
     def _show_popup(self, titulo: str, mensagem: str) -> None:
         """Aviso visual no Windows; em outros sistemas fica só no log."""
@@ -1050,6 +1142,8 @@ class BaseAnalisador:
         Como a conexão aparece no log do watchdog: "COM6" no meio da frase e
         "Porta COM6" no começo dela. A CA-150 em TCP sobrescreve.
         """
+        if self._em_tcp():
+            return f"{'M' if maiuscula else 'a m'}áquina na porta TCP {self._porta_tcp_atual()}"
         return f"Porta {self.COM_PORT}" if maiuscula else self.COM_PORT
 
     def _die_no_connection(self, pendentes: int) -> None:
@@ -1063,6 +1157,8 @@ class BaseAnalisador:
         if self._listener:
             self._listener.stop_listening()
         self._close_serial_handle(getattr(self, "_serial", None))
+        if self._porta_tcp is not None:
+            self._porta_tcp.encerrar()
 
         self._show_popup(f"Conexão perdida - {self.machine_name}", mensagem)
 
@@ -1086,6 +1182,9 @@ class BaseAnalisador:
                 time.sleep(WATCHDOG_POLL_INTERVAL)
                 try:
                     agora = time.time()
+
+                    if self._health:
+                        self._health.update_stats(port_open=self._conexao_ativa())
 
                     if self._serial_is_open():
                         if queda_avisada:
@@ -1131,6 +1230,8 @@ class BaseAnalisador:
         do watchdog (_start_connection_watchdog), que encerra o processo se a
         porta ficar CONNECTION_DEADLINE segundos sem abrir.
         """
+        if self._em_tcp():
+            return self._aguardar_maquina_tcp()
         tentativas = 0
         while True:
             if self._encerrando:
@@ -1159,6 +1260,23 @@ class BaseAnalisador:
                     f"{retry_interval}s..."
                 )
                 time.sleep(retry_interval)
+
+    def _aguardar_maquina_tcp(self) -> Any:
+        """Modo TCP: espera a máquina conectar (sem limite; a queda é do watchdog)."""
+        while True:
+            if self._encerrando:
+                time.sleep(1)
+                continue
+            try:
+                return self._porta_tcp.aguardar(lambda: self._encerrando)
+            except ConexaoTCPEncerrada:
+                time.sleep(1)
+
+    def _criar_porta_tcp(self) -> None:
+        if self._porta_tcp is None:
+            self._porta_tcp = PortaTCP(self.TCP_HOST, self.TCP_PORT, ao_falhar_escuta=self._avisar_porta_tcp_ocupada)
+        self._porta_tcp.iniciar()
+        logging.info(f"Modo TCP: a máquina conecta neste computador em {self.TCP_HOST}:{self.TCP_PORT}.")
 
     def _close_serial_handle(self, ser: Optional[serial.Serial]) -> None:
         """Fecha o handle serial com segurança, ignorando erros."""
@@ -1200,8 +1318,9 @@ class BaseAnalisador:
                 time.sleep(READ_INTERVAL)
 
             except (serial.SerialException, OSError) as e:
+                tipo = "TCP" if self._em_tcp() else "serial"
                 logging.error(
-                    f"✗ Conexão serial perdida ({type(e).__name__}: {e}). "
+                    f"✗ Conexão {tipo} perdida ({type(e).__name__}: {e}). "
                     f"Reconectando..."
                 )
                 self._registrar_erro_serial(e)
@@ -1209,7 +1328,7 @@ class BaseAnalisador:
                 buffer = ""
                 ser = self._open_serial_direct()
                 self._serial = ser
-                logging.info(f"✓ Reconectado à porta {self.COM_PORT}.")
+                logging.info(f"✓ Reconectado {'à ' + self._nome_conexao() if self._em_tcp() else 'à porta ' + self.COM_PORT}.")
 
             except Exception as e:
                 logging.error(f"✗ Erro no loop serial: {type(e).__name__}: {e}")
@@ -1254,7 +1373,7 @@ class BaseAnalisador:
         # Health server
         self._start_health_server()
 
-        # Serial
+        # Serial (ou TCP pela mesma interface)
         if self._use_serial_listener:
             self._start_with_serial_listener()
         else:
@@ -1265,16 +1384,21 @@ class BaseAnalisador:
         # Watchdog de conexão (encerra após CONNECTION_DEADLINE sem porta aberta)
         self._start_connection_watchdog()
 
+        tcp = self._em_tcp()
+        if tcp:
+            self._criar_porta_tcp()
         self._listener = SerialListener(
-            port_name=self.COM_PORT,
+            port_name=f"TCP {self.TCP_PORT}" if tcp else self.COM_PORT,
             baud_rate=self.BAUD_RATE,
             detect_complete_message=self.detect_complete_message,
             on_message=self._on_serial_message,
-            enable_keepalive=self._enable_keepalive,
+            enable_keepalive=self._enable_keepalive and not tcp,
             on_serial_error=self._registrar_erro_serial,
+            abrir=self._aguardar_maquina_tcp if tcp else None,
         )
 
-        if not self._listener.open_port():
+        # Em TCP a primeira abertura espera a máquina: fica com a thread de leitura.
+        if not tcp and not self._listener.open_port():
             logging.warning(
                 f"Não foi possível abrir a porta serial {self.COM_PORT} agora. "
                 f"O sistema continuará tentando reconectar automaticamente."
@@ -1320,6 +1444,9 @@ class BaseAnalisador:
         """Inicia com loop serial inline (BH5100, Coagmaster, VIDAS1600)."""
         # Watchdog de conexão (encerra após CONNECTION_DEADLINE sem porta aberta)
         self._start_connection_watchdog()
+
+        if self._em_tcp():
+            self._criar_porta_tcp()
 
         # Abre a porta com retry a cada 30s (2 tentativas/min) no startup;
         # o watchdog encerra o processo se o deadline for atingido.

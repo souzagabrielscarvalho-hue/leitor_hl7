@@ -526,6 +526,12 @@ class AnalisadorBH5100(BaseAnalisador):
             return not self._ja_conectou or self._conexao is not None
         return super()._serial_is_open()
 
+    def _conexao_ativa(self) -> bool:
+        """No /health (painel do leitor universal), em TCP só conta a máquina conectada agora."""
+        if self.MODO == "tcp":
+            return self._conexao is not None
+        return super()._conexao_ativa()
+
     def _nome_conexao(self, maiuscula: bool = False) -> str:
         if self.MODO != "tcp":
             return super()._nome_conexao(maiuscula)
@@ -706,27 +712,39 @@ def _valor_zerado(valor_com_flag: str) -> bool:
 # ═══════════════════════════════════════════════════════════
 # PONTO DE ENTRADA
 # ═══════════════════════════════════════════════════════════
+# Lidos também pelo leitor universal (universal/leitor.py), que abre a máquina
+# com "leitor.exe --maquina bh5100" e mostra o config no painel.
+
+MACHINE_ID = 'bh5100'
+MACHINE_NAME = 'BH5100'
+HEALTH_PORT = 8080
+CONFIG_DEFAULTS = {
+    # Default continua serial (as unidades atuais rodam por serial); a unidade
+    # que for para rede troca para "tcp". Porta 5100 = número da máquina.
+    'modo': 'serial',
+    'com_port': 'COM3',
+    'baud_rate': 9600,
+    'tcp_host': '0.0.0.0',
+    'tcp_port': 5100,
+    'franchise_credential_id': '88cf9273-5044-47f4-b8f6-01160345a190',
+    'webhook_url': (
+        'https://apoio.internal.vidaexame.com/api/integration/bh5100'
+        '?franchise_credential_id={franchise_credential_id}'
+    ),
+    'exam_images_url': '',
+    'exam_images_machine_token': '',
+}
+
+
+def criar_analisador() -> AnalisadorBH5100:
+    """Analisador com a configuração de produção (config_bh5100.json ao lado do .exe)."""
+    return AnalisadorBH5100(
+        machine_id=MACHINE_ID,
+        machine_name=MACHINE_NAME,
+        config_defaults=CONFIG_DEFAULTS,
+        health_port=HEALTH_PORT,
+    )
+
 
 if __name__ == "__main__":
-    AnalisadorBH5100(
-        machine_id='bh5100',
-        machine_name='BH5100',
-        config_defaults={
-            # Default continua serial (as unidades atuais rodam por serial);
-            # a unidade que for para rede troca para "tcp" no config ao lado do
-            # .exe. Porta 5100 segue a convenção porta = número da máquina.
-            'modo': 'serial',
-            'com_port': 'COM3',
-            'baud_rate': 9600,
-            'tcp_host': '0.0.0.0',
-            'tcp_port': 5100,
-            'franchise_credential_id': '88cf9273-5044-47f4-b8f6-01160345a190',
-            'webhook_url': (
-                'https://apoio.internal.vidaexame.com/api/integration/bh5100'
-                '?franchise_credential_id={franchise_credential_id}'
-            ),
-            'exam_images_url': '',
-            'exam_images_machine_token': '',
-        },
-        health_port=8080,
-    ).start()
+    criar_analisador().start()

@@ -1,6 +1,9 @@
 {
+    "modo": "serial",
     "com_port": "COM6",
     "baud_rate": 19200,
+    "tcp_host": "0.0.0.0",
+    "tcp_port": 5125,
     "franchise_credential_id": "XXXXXXXXXXXXXXXXX",
     "webhook_url": "https://apoio.internal.vidaexame.com/api/integration/pkl-125?franchise_credential_id={franchise_credential_id}",
     "pkl_machine_id": "XXXXXXXXXXXXXXXXX&",

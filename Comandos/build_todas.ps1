@@ -6,7 +6,8 @@ Write-Host "  Build de TODAS as maquinas - Leitor HL7" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
 
-$maquinas = @("bh5100", "ca150", "coagmaster", "mek7300", "pkl", "test_get_only", "urit8021", "vidas1600")
+# leitor primeiro: e o maior (Qt) e o que as unidades atualizam pelas releases.
+$maquinas = @("leitor", "bh5100", "ca150", "coagmaster", "mek7300", "pkl", "test_get_only", "urit8021", "vidas1600")
 $erros = @()
 
 foreach ($m in $maquinas) {
@@ -23,6 +24,7 @@ Write-Host ""
 if ($erros.Count -gt 0) {
     Write-Host "Maquinas com erro: $($erros -join ', ')" -ForegroundColor Red
     Write-Host "Os exes com erro NAO foram atualizados." -ForegroundColor Red
+    Write-Host "Se o erro parecer de cache, rode de novo com LEITOR_BUILD_LIMPO=1." -ForegroundColor Red
     exit 1
 }
 

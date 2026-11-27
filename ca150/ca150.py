@@ -538,6 +538,12 @@ class AnalisadorCA150(BaseAnalisador):
             return not self._ja_conectou or self._conexao is not None
         return super()._serial_is_open()
 
+    def _conexao_ativa(self) -> bool:
+        """No /health, em TCP, só conta a máquina conectada agora."""
+        if self.MODO == "tcp":
+            return self._conexao is not None
+        return super()._conexao_ativa()
+
     def _nome_conexao(self, maiuscula: bool = False) -> str:
         if self.MODO != "tcp":
             return super()._nome_conexao(maiuscula)
@@ -708,26 +714,39 @@ class AnalisadorCA150(BaseAnalisador):
 # ═══════════════════════════════════════════════════════════
 # PONTO DE ENTRADA
 # ═══════════════════════════════════════════════════════════
+# Lidos também pelo leitor universal (universal/leitor.py), que abre a máquina
+# com "leitor.exe --maquina ca150" e mostra o config no painel.
+
+MACHINE_ID = "ca150"
+MACHINE_NAME = "CA150"
+HEALTH_PORT = 8085
+CONFIG_DEFAULTS = {
+    # A CA-150 só se comunica por rede (manual operacional, seção 10.2);
+    # 5150 é a porta padrão da tela LIS da URIT.
+    "modo": "tcp",
+    "com_port": "COM6",
+    "baud_rate": 9600,
+    "tcp_host": "0.0.0.0",
+    "tcp_port": 5150,
+    "franchise_credential_id": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+    "webhook_url": f"{URL_BASE}/integration/ca-150?franchise_credential_id={{franchise_credential_id}}",
+    "consult_url": f"{URL_BASE}/interfacing/tag?franchise_credential_id={{franchise_credential_id}}",
+    # De-para de códigos {código da máquina: código do Vida}. A máquina
+    # recebe/envia pelo código dela; o lab-apoio grava pelo código do Vida.
+    # Edite por unidade conforme os códigos cadastrados na máquina.
+    "depara_codigos": {"HDLE": "HDL"},
+}
+
+
+def criar_analisador() -> AnalisadorCA150:
+    """Analisador com a configuração de produção (config_ca150.json ao lado do .exe)."""
+    return AnalisadorCA150(
+        machine_id=MACHINE_ID,
+        machine_name=MACHINE_NAME,
+        config_defaults=CONFIG_DEFAULTS,
+        health_port=HEALTH_PORT,
+    )
+
 
 if __name__ == "__main__":
-    AnalisadorCA150(
-        machine_id="ca150",
-        machine_name="CA150",
-        config_defaults={
-            # A CA-150 só se comunica por rede (manual operacional, seção 10.2);
-            # 5150 é a porta padrão da tela LIS da URIT.
-            "modo": "tcp",
-            "com_port": "COM6",
-            "baud_rate": 9600,
-            "tcp_host": "0.0.0.0",
-            "tcp_port": 5150,
-            "franchise_credential_id": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
-            "webhook_url": f"{URL_BASE}/integration/ca-150?franchise_credential_id={{franchise_credential_id}}",
-            "consult_url": f"{URL_BASE}/interfacing/tag?franchise_credential_id={{franchise_credential_id}}",
-            # De-para de códigos {código da máquina: código do Vida}. A máquina
-            # recebe/envia pelo código dela; o lab-apoio grava pelo código do Vida.
-            # Edite por unidade conforme os códigos cadastrados na máquina.
-            "depara_codigos": {"HDLE": "HDL"},
-        },
-        health_port=8085,
-    ).start()
+    criar_analisador().start()

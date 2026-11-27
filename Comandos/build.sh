@@ -5,7 +5,8 @@
 # e o unico jeito de gerar .exe do Windows.
 #
 # Uso: ./build.sh <maquina|todas>
-#   maquinas: bh5100 ca150 coagmaster mek7300 pkl urit8021 vidas1600 todas
+#   alvos: leitor (universal) bh5100 ca150 coagmaster mek7300 pkl urit8021 vidas1600 todas
+#   LEITOR_BUILD_LIMPO=1 ./build.sh todas   -> descarta o cache e compila do zero
 # =============================================================================
 set -euo pipefail
 
@@ -15,7 +16,7 @@ PS1="$DIR/build_${ALVO}.ps1"
 
 if [ ! -f "$PS1" ]; then
     echo "Alvo invalido: '$ALVO'."
-    echo "Use um destes: bh5100 ca150 coagmaster mek7300 pkl urit8021 vidas1600 todas"
+    echo "Use um destes: leitor bh5100 ca150 coagmaster mek7300 pkl urit8021 vidas1600 todas"
     exit 1
 fi
 
@@ -27,4 +28,6 @@ fi
 
 WINPS1="$(wslpath -w "$PS1")"
 echo "Compilando ($ALVO) com o PyInstaller no Windows..."
+# Repassa o LEITOR_BUILD_LIMPO ao PowerShell do Windows (WSLENV).
+export WSLENV="${WSLENV:+$WSLENV:}LEITOR_BUILD_LIMPO"
 powershell.exe -ExecutionPolicy Bypass -File "$WINPS1"

@@ -1,5 +1,5 @@
 ﻿"""
-Analisador Coagmaster — Integração de log proprietário via porta serial.
+Analisador Coagmaster — Integração de log proprietário via porta serial ou TCP.
 
 Herda de BaseAnalisador e implementa apenas os hooks específicos
 do protocolo de texto do Coagmaster.
@@ -399,21 +399,38 @@ class AnalisadorCoagmaster(BaseAnalisador):
 # ═══════════════════════════════════════════════════════════
 # PONTO DE ENTRADA
 # ═══════════════════════════════════════════════════════════
+# Lidos também pelo leitor universal (universal/leitor.py), que abre a máquina
+# com "leitor.exe --maquina coagmaster" e mostra o config no painel.
 
-if __name__ == "__main__":
-    AnalisadorCoagmaster(
-        machine_id='coagmaster',
-        machine_name='Coagmaster',
-        config_defaults={
-            'com_port': 'COM4',
-            'baud_rate': 115200,
-            'franchise_credential_id': 'f47d9a16-1a3c-4c2e-9e5f-6b3c8d7e9f0a',
-            'webhook_url': (
-                'https://apoio.internal.vidaexame.com/api/integration/coagmaster'
-                '?franchise_credential_id={franchise_credential_id}'
-            ),
-        },
-        health_port=8081,
+MACHINE_ID = 'coagmaster'
+MACHINE_NAME = 'Coagmaster'
+HEALTH_PORT = 8081
+CONFIG_DEFAULTS = {
+    # Conexão: "serial" (COM) ou "tcp" (a máquina conecta neste PC em tcp_host:tcp_port).
+    'modo': 'serial',
+    'com_port': 'COM4',
+    'baud_rate': 115200,
+    'tcp_host': '0.0.0.0',
+    'tcp_port': 5200,
+    'franchise_credential_id': 'f47d9a16-1a3c-4c2e-9e5f-6b3c8d7e9f0a',
+    'webhook_url': (
+        'https://apoio.internal.vidaexame.com/api/integration/coagmaster'
+        '?franchise_credential_id={franchise_credential_id}'
+    ),
+}
+
+
+def criar_analisador() -> AnalisadorCoagmaster:
+    """Analisador com a configuração de produção (config_coagmaster.json ao lado do .exe)."""
+    return AnalisadorCoagmaster(
+        machine_id=MACHINE_ID,
+        machine_name=MACHINE_NAME,
+        config_defaults=CONFIG_DEFAULTS,
+        health_port=HEALTH_PORT,
         console_logging=True,
         redirect_stdout=False,
-    ).start()
+    )
+
+
+if __name__ == "__main__":
+    criar_analisador().start()

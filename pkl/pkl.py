@@ -612,23 +612,40 @@ class AnalisadorPKL125(BaseAnalisador):
 # ═══════════════════════════════════════════════════════════
 # PONTO DE ENTRADA
 # ═══════════════════════════════════════════════════════════
+# Lidos também pelo leitor universal (universal/leitor.py), que abre a máquina
+# com "leitor.exe --maquina pkl" e mostra o config no painel.
 
-if __name__ == "__main__":
-    AnalisadorPKL125(
-        machine_id='pkl',
-        machine_name='PKL125',
-        config_defaults={
-            'com_port': 'COM3',
-            'baud_rate': 19200,
-            'franchise_credential_id': '4e768395-1b2c-4d3e-8f9a-5c6d7e8f9a0b',
-            'pkl_machine_id': '',
-            'webhook_url': (
-                'https://apoio.internal.vidaexame.com/api/integration/pkl-125'
-                '?franchise_credential_id={franchise_credential_id}'
-            ),
-        },
-        health_port=8083,
+MACHINE_ID = 'pkl'
+MACHINE_NAME = 'PKL125'
+HEALTH_PORT = 8083
+CONFIG_DEFAULTS = {
+    # Conexão: "serial" (COM) ou "tcp" (a máquina conecta neste PC em tcp_host:tcp_port).
+    'modo': 'serial',
+    'com_port': 'COM3',
+    'baud_rate': 19200,
+    'tcp_host': '0.0.0.0',
+    'tcp_port': 5125,
+    'franchise_credential_id': '4e768395-1b2c-4d3e-8f9a-5c6d7e8f9a0b',
+    'pkl_machine_id': '',
+    'webhook_url': (
+        'https://apoio.internal.vidaexame.com/api/integration/pkl-125'
+        '?franchise_credential_id={franchise_credential_id}'
+    ),
+}
+
+
+def criar_analisador() -> AnalisadorPKL125:
+    """Analisador com a configuração de produção (config_pkl.json ao lado do .exe)."""
+    return AnalisadorPKL125(
+        machine_id=MACHINE_ID,
+        machine_name=MACHINE_NAME,
+        config_defaults=CONFIG_DEFAULTS,
+        health_port=HEALTH_PORT,
         console_logging=True,
         redirect_stdout=False,
         use_serial_listener=True,
-    ).start()
+    )
+
+
+if __name__ == "__main__":
+    criar_analisador().start()

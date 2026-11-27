@@ -4,7 +4,8 @@
 # para o clone do HL7_integrator (empresa), commita e envia.
 #
 # A empresa e um espelho do pessoal MENOS os arquivos pessoais. O script:
-#   - NAO copia CLAUDE.md, enviar.ps1, build_all.ps1, codigo nem a pasta Comandos/
+#   - NAO copia CLAUDE.md, enviar.ps1, build_all.ps1, codigo, a pasta Comandos/ nem
+#     .github/ (as releases do leitor.exe saem so do repositorio pessoal)
 #   - NAO toca em .git, venv, logs e configs reais da empresa
 #   - remove da empresa os arquivos versionados que sumiram do pessoal
 #
@@ -22,7 +23,7 @@ PADRAO_TOKEN='exam_images_machine_token.{1,6}[A-Za-z0-9]{20,}'
 
 # Arquivos pessoais que nunca vao para a empresa. O .gitignore fica de fora para
 # cada repo manter o seu (o da empresa ignora os arquivos pessoais).
-EXCLUIR='^(CLAUDE\.md|enviar\.ps1|build_all\.ps1|codigo|Comandos/|\.gitignore)'
+EXCLUIR='^(CLAUDE\.md|enviar\.ps1|build_all\.ps1|codigo|Comandos/|\.github/|\.gitignore)'
 
 MSG="${1:-}"
 [ -z "$MSG" ] && MSG="Sincroniza com leitor_hl7 - $(date '+%Y-%m-%d %H:%M:%S')"

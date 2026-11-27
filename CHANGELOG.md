@@ -3,6 +3,76 @@
 Versão única para todos os leitores, definida em `shared/versao.py`. Ela aparece na abertura do
 `analisador_<maquina>.log` e no `GET /health`.
 
+## 7.4.0 - 2026-11-27
+
+- Leitor universal `leitor.exe` (`universal/leitor.py`): um .exe para todas as máquinas, com painel em janela
+  nativa (Qt Widgets, PySide6). O painel lista as máquinas adicionadas neste computador, edita o
+  `config_<maquina>.json` em formulário, inicia, para e reinicia cada uma e mostra o estado (pelo `GET /health`), os
+  exames em `gerados/` e o log ao vivo. Abrir o .exe de novo traz a janela aberta para a frente. Ícone próprio
+  (`universal/icone/leitor.svg`). Dependência nova: `PySide6-Essentials`.
+- Painel: "Adicionar equipamento" escolhe o modelo, a pasta do arquivo de configuração e os parâmetros. Se a pasta já
+  tem o `config_<maquina>.json`, ele é usado como está, sem ser sobrescrito. A lista e a pasta de cada máquina ficam
+  em `leitor_painel.json`; configs que já existem ao lado do .exe entram na lista sozinhos. "Remover da lista" mantém o
+  arquivo. A máquina aberta pelo painel lê o config da pasta dela (variável `LEITOR_HL7_CONFIG_DIR`, que só o painel
+  define; sem ela, os .exe de cada máquina continuam lendo ao lado do .exe).
+- Painel: clicar na versão (canto inferior direito) abre o menu com "Sobre esta versão" (trecho do CHANGELOG) e
+  "Verificar atualização". A versão nova vem da última release do GitHub (`souzagabrielscarvalho-hue/leitor_hl7`,
+  anexo `leitor.exe`); o download é conferido pelo SHA-256 publicado (sem SHA-256, não instala), o executável atual
+  fica como `leitor.exe.anterior` e o painel reabre na versão nova. As máquinas abertas seguem na versão anterior até
+  serem reiniciadas.
+- Painel: portas virtuais (com0com, VSPE, Eltima...) aparecem na lista. Além do pyserial, o painel lê o registro
+  `HARDWARE\DEVICEMAP\SERIALCOMM` e os nomes `COMn` do Windows (`QueryDosDevice`).
+- Cada máquina continua em processo próprio (`leitor.exe --maquina <id>`), com o mesmo comportamento do .exe dela:
+  log em `Desktop\Analisador<MAQUINA>`, watchdog e popup de queda. Fechar o painel não para as máquinas. O painel tem
+  log próprio em `Desktop\LeitorHL7\leitor_painel.log`.
+- Painel: valida o config antes de salvar (UUID da unidade, nada de `XXXX...`; o `webhook_url` só pode trocar o host,
+  nunca a rota da máquina) e não deixa iniciar máquina sem config válido.
+- Painel: tela "Portas seriais" com o que o Windows informa de cada porta (descrição, fabricante, VID:PID, número de
+  série, posição USB), as máquinas configuradas em cada uma e, sob demanda, se outro programa está usando a porta.
+  O painel lembra o adaptador USB de cada máquina (`leitor_painel.json`) e, se o Windows trocar o número da COM,
+  sugere a COM nova.
+- Os .exe de cada máquina continuam sendo gerados e funcionando como antes. Cada módulo de máquina agora expõe
+  `MACHINE_ID`, `MACHINE_NAME`, `HEALTH_PORT`, `CONFIG_DEFAULTS` e `criar_analisador()`.
+- `GET /health` (todas as máquinas): novo campo `pid`, e `port_open` passa a ser atualizado pelo watchdog também nas
+  máquinas sem `SerialListener` (antes ficava sempre `false` na BH5100, CA-150, Coagmaster, URIT-8021A e VIDAS).
+  Em TCP, `port_open` é a máquina conectada agora.
+- Serial ou TCP em todas as máquinas: Coagmaster, MEK7300, PKL e VIDAS 1600 ganham `"modo": "tcp"` (a máquina
+  conecta neste PC em `tcp_host:tcp_port`), como a CA-150, a URIT-8021A e a BH5100 (7.2.0, TCP próprio) já tinham. O protocolo não muda: a
+  conexão TCP (`shared/conexao_tcp.py`) se comporta como uma porta serial para os mesmos laços de leitura, inclusive
+  o ASTM bidirecional do PKL. Configs existentes ganham `modo: "serial"`, `tcp_host` e `tcp_port` sozinhos ao abrir
+  e continuam na serial. Portas TCP padrão: Coagmaster 5200, MEK7300 7300, PKL 5125, VIDAS 1600 5160.
+  Queda em TCP segue a regra da serial (envia `gerados/`, popup, encerra); antes da primeira conexão e conexão
+  substituída não são queda; porta TCP ocupada avisa com `_popup_sem_travar` e tenta de novo.
+- Painel: configuração só com administrador. Salvar, adicionar, remover equipamento e trocar a porta sugerida pedem a
+  senha mestra (o núcleo recusa também, não só a tela). A senha fica no código só como hash PBKDF2-SHA256
+  (`shared/painel/acesso.py`, definida com `python3 -m shared.painel.acesso`); sem hash no build, a edição fica
+  bloqueada. A sessão termina após 15 min sem alterações ou ao fechar o painel; 5 senhas erradas bloqueiam por 60 s.
+  Ver, iniciar e parar continuam livres.
+- Painel: botão "Configurações" na barra de título, com Tema (seguir o sistema, claro, escuro; fica em
+  `leitor_painel.json`), entrar/sair como administrador, abrir a pasta do programa e versão/atualização. O indicador
+  "Somente leitura"/"Administrador" mostra o acesso atual. Campos bloqueados aparecem apagados.
+- Painel: Configurações > "Pasta raiz do programa". Uma pasta para tudo o que o leitor grava: configs,
+  `leitor_painel.json`, as pastas `Analisador<MAQUINA>` (antes sempre na Área de Trabalho) e o log do painel
+  (`<raiz>\Painel`). Ao trocar, os configs e a lista são copiados (sem sobrescrever o que já houver na pasta nova) e
+  os exames pendentes de `gerados/` vão junto; o histórico fica na pasta antiga. Exige administrador e as máquinas
+  paradas. A escolha fica em `leitor_raiz.json`, ao lado do `leitor.exe`; sem ele, nada muda. A base lê a pasta de
+  dados de `LEITOR_HL7_DADOS_DIR` (`config_loader.pasta_dados()`).
+- Painel: primeira abertura neste computador (sem `leitor_raiz.json`) abre um assistente antes da janela: 1) senha
+  de administrador; 2) pasta raiz do programa (sugestão `C:\LeitorHL7`), com "Procurar…", "Criar nova pasta…" ou
+  "Não usar pasta raiz". Fechar o assistente fecha o painel, que pergunta de novo na próxima vez. Ao ligar com o
+  Windows nunca pergunta; build sem senha mestra pula o assistente.
+- Painel: Configurações > "Iniciar com o Windows" registra o `leitor.exe --ao-ligar` em
+  `HKCU\...\CurrentVersion\Run`. Ao entrar no Windows, o painel abre minimizado e inicia as máquinas marcadas com
+  "Iniciar ao ligar" (caixa no cabeçalho de cada máquina; marcada por padrão) que estejam paradas e com config
+  pronto. Exige administrador.
+- Build (`Comandos/`): alvo `leitor` (`build.sh leitor`, e primeiro no `build.sh todas`) e cache do PyInstaller
+  por exe em `build_cache\<nome>` (sem `--clean`, reaproveitado no build seguinte; `LEITOR_BUILD_LIMPO=1` compila do
+  zero). Mostra o tempo de cada exe.
+- Releases: `Comandos/release.sh` confere VERSAO, CHANGELOG e o commit já enviado e cria a tag `vX.Y.Z` no
+  repositório pessoal; o workflow `.github/workflows/release.yml` roda os testes, compila o `leitor.exe` no Windows,
+  confere que ele abre e publica a release com o `leitor.exe` e o `leitor.exe.sha256`, de onde o painel das unidades
+  atualiza. `.github/` não vai para a empresa.
+
 ## 7.3.0 - 2026-11-27
 
 - De-para de códigos de exame configurável, agora na **base** (todas as máquinas), pela chave

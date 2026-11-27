@@ -13,6 +13,20 @@ Responda, comente o código e escreva commits em português do Brasil.
 - A tela **Laboratório Interno > Máquinas** (`/laboratory/machines`) baixa o `.exe` e o JSON direto da branch `main`
   deste repositório no GitHub, a cada clique (`back_vida_exame/config/laboratory_machines.php`). O que está na
   `main` é o que as unidades instalam.
+- O leitor universal (`universal/leitor.py`, `build/leitor/leitor.exe`) roda o painel em janela nativa Qt
+  (PySide6 Widgets, `shared/painel/janela.py` e `tema.py`; a lógica sem Qt fica em `nucleo.py`) e abre cada máquina
+  em processo próprio com `--maquina <id>`. Nada de tela web. Máquina nova entra no registro `shared/maquinas.py`,
+  no `hiddenimports` do `universal/leitor.spec` e precisa expor `MACHINE_ID`, `MACHINE_NAME`, `HEALTH_PORT`,
+  `CONFIG_DEFAULTS` e `criar_analisador()` no módulo.
+- Versões novas chegam às unidades pelas releases do GitHub (`REPOSITORIO` em `shared/painel/atualizacao.py`):
+  tag `vX.Y.Z` com os anexos `leitor.exe` e `leitor.exe.sha256` (o painel exige o SHA-256). A tag sai do
+  `Comandos/release.sh` e o `.github/workflows/release.yml` compila e publica. Publicar é externo e só com pedido
+  do usuário.
+- Toda máquina aceita serial ou TCP (`"modo"`, `tcp_host`, `tcp_port` no config). O TCP genérico está em
+  `shared/conexao_tcp.py` (servidor que se comporta como porta serial para os laços da base); a CA-150, a URIT e a
+  BH5100 têm o TCP próprio delas. Máquina nova ganha as duas formas e uma porta TCP padrão diferente das outras.
+- Alterar configuração no painel exige a senha mestra (`shared/painel/acesso.py`). No código vai só o hash PBKDF2
+  (`HASH_SENHA_MESTRA`); a senha em texto nunca vai para arquivo, commit, teste ou log.
 - A base comum fica em `shared/base_analisador.py` e serve a todas as máquinas. Não mude o comportamento das outras
   máquinas para atender uma: prefira um gancho (método com padrão vazio) e sobrescreva na máquina.
 
@@ -20,7 +34,8 @@ Responda, comente o código e escreva commits em português do Brasil.
 
 ### 1. Todo passo vai para o log de execução
 
-- O log é o arquivo de texto `Desktop\Analisador<MAQUINA>\analisador_<maquina>.log`, gravado pelo `logging`. Os dias
+- O log é o arquivo de texto `Desktop\Analisador<MAQUINA>\analisador_<maquina>.log` (ou `<raiz>\Analisador<MAQUINA>`
+  com a pasta raiz do leitor universal; use `config_loader.pasta_dados()`), gravado pelo `logging`. Os dias
   anteriores (e o trecho de abertura) ficam em `logs\`.
 - Cada etapa, **com sucesso ou com falha**, deixa uma linha: recebeu da máquina, consultou, respondeu à máquina, a
   máquina confirmou, enviou ao lab-apoio, o que foi gravado e o que ficou de fora. Use `✓` para sucesso e `✗` para
@@ -41,7 +56,7 @@ Responda, comente o código e escreva commits em português do Brasil.
 - Em TCP, antes da primeira conexão da máquina não é queda, e uma conexão substituída por outra também não.
 - Popup que não deve encerrar (ex.: porta TCP ocupada) usa `_popup_sem_travar` e nunca abre dois ao mesmo tempo.
 - Toda máquina nova precisa ter teste de queda (veja `tests/test_interfaceamento.py::TestQuedaCOM` e
-  `tests/test_ca150.py::TestTCP` ou `tests/test_urit8021.py::TestTCP`).
+  `tests/test_ca150.py::TestTCP`, `tests/test_urit8021.py::TestTCP` ou `tests/test_tcp_generico.py`).
 
 ### 3. Nunca commitar chave real
 
@@ -64,7 +79,7 @@ Responda, comente o código e escreva commits em português do Brasil.
 ### 5. Sempre deixar o número da versão
 
 - A versão é uma só para todos os leitores, em `shared/versao.py` (`VERSAO`), no formato MAJOR.MINOR.PATCH. A atual
-  é **7.2.0**.
+  é **7.4.0**.
 - Toda mudança que gera `.exe` novo sobe a versão (MAJOR: muda a instalação, como config, rota ou protocolo;
   MINOR: função nova; PATCH: correção) e ganha uma entrada no `CHANGELOG.md`.
 - A versão aparece na abertura do log (`Analisador <MAQUINA> - Serviço de Integração - versão X.Y.Z`) e no
@@ -89,6 +104,8 @@ Responda, comente o código e escreva commits em português do Brasil.
   analisador -> pasta do spec) e inclua-a na lista `$maquinas` de `Comandos/build_todas.ps1`.
 - Assim a máquina nova é compilada tanto sozinha (`build.sh <maquina>`) quanto junto com todas as outras
   (`build.sh todas`). Toda máquina deve aparecer no build de todas; nunca deixe uma máquina de fora.
+- O leitor universal é o alvo `leitor` (`Comandos/build_leitor.ps1`, `universal/leitor.spec` -> `build/leitor/`).
+  Máquina nova também entra no `hiddenimports` do `universal/leitor.spec`.
 
 ## Testes e build
 

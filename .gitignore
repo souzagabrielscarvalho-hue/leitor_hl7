@@ -20,6 +20,12 @@ build/bh5100/config_bh5100.json
 build/bh5100/envio_com.exe
 build/bh5100/config_envio_com.json
 
+# Leitor universal em desenvolvimento: config e estado do painel criados ao lado do leitor.py
+universal/config_*.json
+universal/leitor_painel.json
+build/leitor/leitor_painel.json
+build/leitor/config_*.json
+
 # Saída do build_all.ps1
 build_logs/
 
@@ -59,3 +65,11 @@ icon_extracted.png
 # Arquivos de log do equipamento
 coagmaster.log.txt
 coagmaster.log.txt
+# Pacotes Linux (vão para as releases do GitHub, não para o git) e cache do build
+build/linux/
+linux/.cache/
+
+# Cache do PyInstaller por exe (build_all.ps1): acelera os builds seguintes.
+build_cache/
+universal/leitor_raiz.json
+build/leitor/leitor_raiz.json
