@@ -298,6 +298,78 @@ class TestConsulta(BaseCA150):
         self.assertIn("QAK|SR|AE|", quadros(porta.escrito)[0])
 
 
+class TestDepara(BaseCA150):
+    """De-para de códigos (config depara_codigos), nos dois sentidos."""
+
+    # Consulta: o Vida manda o código do atributo (HDL); a máquina só conhece HDLE.
+    CONSULTA_HDL = {
+        "message": "ok",
+        "data": {
+            "tag_id": "Barcode001",
+            "patient": {"name": "Maria", "age": 30, "gender": "F"},
+            "exams": [
+                {"exam_code": "COL", "materials": ["SORO"], "attributes": [
+                    {"code": "HDL", "name": "HDL Colesterol", "unit": "mg/dL"},
+                    {"code": "URE", "name": "Ureia", "unit": "mg/dL"},
+                ]},
+            ],
+        },
+    }
+
+    # Resultado: a máquina manda o código dela (HDLE); o URE é igual nos dois lados.
+    ORU_HDLE = quadro(
+        "MSH|^~\\&|URIT|CA-XXX|||20210701105518||ORU^R01|202107010001|p|2.3.1||||0||ANSI|||",
+        "OBR|1|Barcode001|202107010001|URIT^CA-XXX|0||2021/07/01||||||||Serum||||||||||||||||||||",
+        "OBX|1|NM|0|HDLE|45.0|mg/dL|40-60|N|||F||0.5|2021/07/01||Server||",
+        "OBX|2|NM|1|URE|30.0|mg/dL|10-50|N|||F||0.4|2021/07/01||Server||",
+    )
+
+    def test_consulta_traduz_codigo_do_vida_para_o_da_maquina(self) -> None:
+        self.servidor.corpo_consulta = self.CONSULTA_HDL
+        analisador, porta = self.criar_serial(depara_codigos={"HDLE": "HDL"})
+
+        analisador._responder_consulta(QRY)
+
+        _, dsr = quadros(porta.escrito)
+        dsp = dsr.rstrip(EB + CR).split(CR)[6:-1]
+        # HDL (Vida) vira HDLE (máquina); URE é igual nos dois lados e não muda.
+        self.assertEqual(dsp[-2:], ["DSP|18||1^HDLE^^^^|||", "DSP|19||2^URE^^^^|||"])
+
+    def test_resultado_traduz_codigo_da_maquina_para_o_do_vida(self) -> None:
+        # A tradução do envio é da base (aplicada no loop de envio).
+        analisador = self.criar(depara_codigos={"HDLE": "HDL"})
+        caminho = os.path.join(analisador.GERADOS_DIR, "exame.hl7")
+        with open(caminho, "w", encoding="utf-8", newline="") as arquivo:
+            arquivo.write(self.ORU_HDLE)
+
+        payloads = analisador.process_file(caminho, "exame.hl7")
+        analisador.aplicar_depara_resultado(payloads[0])
+
+        codigos = [r["code"] for r in payloads[0]["results"]]
+        self.assertEqual(codigos, ["HDL", "URE"])
+
+    def test_sem_depara_mantem_os_codigos(self) -> None:
+        analisador = self.criar()
+        caminho = os.path.join(analisador.GERADOS_DIR, "exame.hl7")
+        with open(caminho, "w", encoding="utf-8", newline="") as arquivo:
+            arquivo.write(self.ORU_HDLE)
+
+        payloads = analisador.process_file(caminho, "exame.hl7")
+        analisador.aplicar_depara_resultado(payloads[0])
+
+        self.assertEqual([r["code"] for r in payloads[0]["results"]], ["HDLE", "URE"])
+
+    def test_depara_cobre_o_campo_test_e_nao_toca_exam_code(self) -> None:
+        # Formato do PKL: results com exam_code + test (o código do atributo é test).
+        analisador = self.criar(depara_codigos={"FIB2": "FIB"})
+        payload = {"tag_id": "x", "results": [{"exam_code": "COAG", "test": "FIB2", "value": "300"}]}
+
+        analisador.aplicar_depara_resultado(payload)
+
+        self.assertEqual(payload["results"][0]["test"], "FIB")
+        self.assertEqual(payload["results"][0]["exam_code"], "COAG")
+
+
 ACK_Q03 = quadro(
     "MSH|^~\\&|URIT|CA-XXX|||20210701110316||ACK^Q03|20210701110314|p|2.3.1||||0||ANSI|||",
     "MSA|AA|20210701110314|Message accepted|||0|",

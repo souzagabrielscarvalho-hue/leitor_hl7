@@ -78,6 +78,9 @@ def load_config(
         "baud_rate": defaults.get("baud_rate", 9600),
         "franchise_credential_id": defaults.get("franchise_credential_id", ""),
         "webhook_url": defaults.get("webhook_url", ""),
+        # De-para de códigos de exame, comum a todas as máquinas:
+        # {código da máquina: código do Vida}, ex.: {"HDLE": "HDL"}.
+        "depara_codigos": defaults.get("depara_codigos", {}),
     }
     for chave in CHAVES_OPCIONAIS:
         if chave in defaults:

@@ -177,18 +177,27 @@ def itens_da_consulta(exames: List[Dict[str, Any]]) -> List[str]:
     return codigos
 
 
-def gerar_dsr(mensagem: str, dados: Dict[str, Any]) -> bytes:
+def traduzir_codigo(codigo: str, mapa: Optional[Dict[str, str]]) -> str:
+    """Troca o código pelo equivalente do mapa; sem mapa ou sem entrada, devolve o próprio."""
+    return mapa.get(codigo, codigo) if mapa else codigo
+
+
+def gerar_dsr(mensagem: str, dados: Dict[str, Any], depara_vida_maq: Optional[Dict[str, str]] = None) -> bytes:
     """
     DSR^Q03 (manual 3.10 e 4.3) com uma amostra só, terminando em DSC|-1|.
     Campos que o sistema não tem (prontuário, leito, setor, médico,
     urgência) vão vazios ou com o padrão do manual.
+
+    depara_vida_maq: mapa código do Vida -> código da máquina. A máquina só
+    reconhece o exame pelo código DELA, então o código do atributo vindo do
+    lab-apoio é traduzido antes de ir no DSR (config: depara_codigos).
     """
     control_id = campo(campos_do_segmento(mensagem, "MSH"), 9)
     qrf = next((s for s in segmentos(mensagem) if s.startswith("QRF|")), "QRF|CA-150|||||RCT|COR|ALL||")
     etiqueta = texto_hl7(dados.get("tag_id")) or etiqueta_da_consulta(mensagem)
     paciente = dados.get("patient") or {}
     exames = dados.get("exams") or []
-    itens = itens_da_consulta(exames)
+    itens = [traduzir_codigo(c, depara_vida_maq) for c in itens_da_consulta(exames)]
 
     idade = paciente.get("age")
     sexo = str(paciente.get("gender") or "").strip().upper()
@@ -483,9 +492,14 @@ class AnalisadorCA150(BaseAnalisador):
                     return
                 time.sleep(INTERVALO_DSR)
                 itens = itens_da_consulta(dados.get("exams") or [])
-                if self._escrever(gerar_dsr(mensagem, dados)):
+                itens_maquina = [traduzir_codigo(c, self.DEPARA_VIDA_MAQ) for c in itens]
+                if self._escrever(gerar_dsr(mensagem, dados, self.DEPARA_VIDA_MAQ)):
+                    enviados = ", ".join(
+                        f"{maq} (={vida})" if maq != vida else maq
+                        for vida, maq in zip(itens, itens_maquina)
+                    )
                     logging.info(
-                        f"✓ Etiqueta {etiqueta}: enviados {len(itens)} item(ns) à máquina: {', '.join(itens)}. "
+                        f"✓ Etiqueta {etiqueta}: enviados {len(itens_maquina)} item(ns) à máquina: {enviados}. "
                         f"Aguardando a confirmação (ACK^Q03)."
                     )
                 else:
@@ -710,6 +724,10 @@ if __name__ == "__main__":
             "franchise_credential_id": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
             "webhook_url": f"{URL_BASE}/integration/ca-150?franchise_credential_id={{franchise_credential_id}}",
             "consult_url": f"{URL_BASE}/interfacing/tag?franchise_credential_id={{franchise_credential_id}}",
+            # De-para de códigos {código da máquina: código do Vida}. A máquina
+            # recebe/envia pelo código dela; o lab-apoio grava pelo código do Vida.
+            # Edite por unidade conforme os códigos cadastrados na máquina.
+            "depara_codigos": {"HDLE": "HDL"},
         },
         health_port=8085,
     ).start()

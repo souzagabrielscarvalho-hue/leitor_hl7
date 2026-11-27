@@ -509,6 +509,9 @@ class BaseAnalisador:
         self._envia_imagens = "exam_images_machine_token" in _config
         self._config_status = _config_status
 
+        # De-para de códigos de exame (comum a todas as máquinas).
+        self._carregar_depara(_config.get("depara_codigos"))
+
         # Webhook URL com tratamento robusto para evitar erros
         raw_webhook = _config.get("webhook_url", "")
         if raw_webhook:
@@ -529,6 +532,66 @@ class BaseAnalisador:
             )
 
         self._config_status = _config_status
+
+    def _carregar_depara(self, bruto: Any) -> None:
+        """
+        Lê depara_codigos do config, no formato {código da máquina: código do Vida},
+        ex.: {"HDLE": "HDL"}. Monta os dois sentidos:
+        - DEPARA_MAQ_VIDA: resultado que vem da máquina -> código do Vida (envio);
+        - DEPARA_VIDA_MAQ: código do Vida -> código da máquina (consulta).
+
+        Roda antes do logging; avisos ficam em _depara_avisos e saem no banner.
+        """
+        self._depara_avisos: List[str] = []
+        self.DEPARA_MAQ_VIDA: Dict[str, str] = {}
+        if not bruto:
+            bruto = {}
+        if not isinstance(bruto, dict):
+            self._depara_avisos.append(
+                "depara_codigos no config não é um objeto {código_máquina: código_vida}; ignorado."
+            )
+            bruto = {}
+        for maq, vida in bruto.items():
+            if isinstance(maq, str) and isinstance(vida, str) and maq.strip() and vida.strip():
+                self.DEPARA_MAQ_VIDA[maq.strip()] = vida.strip()
+            else:
+                self._depara_avisos.append(f"de-para ignorado (código inválido): {maq!r} -> {vida!r}.")
+
+        self.DEPARA_VIDA_MAQ: Dict[str, str] = {}
+        for maq, vida in self.DEPARA_MAQ_VIDA.items():
+            if vida in self.DEPARA_VIDA_MAQ:
+                self._depara_avisos.append(
+                    f"de-para: o código do Vida {vida!r} aponta para mais de um código da máquina; "
+                    f"a consulta continuará usando {self.DEPARA_VIDA_MAQ[vida]!r}."
+                )
+            else:
+                self.DEPARA_VIDA_MAQ[vida] = maq
+
+    def aplicar_depara_resultado(self, payload: Dict[str, Any]) -> None:
+        """
+        Envio: troca o código da máquina pelo código do Vida nos resultados, antes do POST.
+
+        Cobre os payloads que trazem uma lista 'results' com o código do atributo em
+        'code' (CA-150, URIT-8021) ou 'test' (PKL). Os códigos de exame ('exam_code',
+        'ExamCode') não são tocados. Payloads de hemograma (BH5100, MEK7300, VIDAS),
+        que não têm 'results' com código por item, passam inalterados.
+        """
+        if not self.DEPARA_MAQ_VIDA:
+            return
+        trocados = []
+        for item in payload.get("results") or []:
+            if not isinstance(item, dict):
+                continue
+            for chave in ("code", "test"):
+                original = item.get(chave)
+                if isinstance(original, str):
+                    novo = self.DEPARA_MAQ_VIDA.get(original, original)
+                    if novo != original:
+                        item[chave] = novo
+                        trocados.append(f"{original}→{novo}")
+        if trocados:
+            tag = payload.get("tag_id") or payload.get("FileName") or "(sem etiqueta)"
+            logging.info(f"De-para aplicado no resultado ({tag}): {', '.join(trocados)}.")
 
     def _setup_dirs(self) -> None:
         desktop = os.path.join(os.path.expanduser("~"), "Desktop")
@@ -612,6 +675,13 @@ class BaseAnalisador:
         logging.info(f"Reenvio: até {MAX_RETRY} tentativas com intervalo de {RETRY_INTERVAL}s")
         if self._health_port > 0:
             logging.info(f"Health Check: http://0.0.0.0:{self._health_port}/health")
+        if self.DEPARA_MAQ_VIDA:
+            logging.info(
+                "De-para de códigos ativo (máquina↔Vida): "
+                + ", ".join(f"{maq}↔{vida}" for maq, vida in self.DEPARA_MAQ_VIDA.items())
+            )
+        for aviso in getattr(self, "_depara_avisos", []):
+            logging.warning(aviso)
         logging.info("=" * 60)
 
     # ── HEALTH CHECK ──────────────────────────────────────────
@@ -826,6 +896,7 @@ class BaseAnalisador:
                     all_sent = True
                     tag_falha = nome_arquivo
                     for payload in payloads:
+                        self.aplicar_depara_resultado(payload)
                         tag = payload.get("FileName", payload.get("tag_id", nome_arquivo))
                         sent = self._enviar_payload_webhook(payload, nome_arquivo, str(tag))
                         if not sent:

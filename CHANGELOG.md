@@ -3,6 +3,21 @@
 Versão única para todos os leitores, definida em `shared/versao.py`. Ela aparece na abertura do
 `analisador_<maquina>.log` e no `GET /health`.
 
+## 7.3.0 - 2026-11-27
+
+- De-para de códigos de exame configurável, agora na **base** (todas as máquinas), pela chave
+  `depara_codigos` do config, no formato `{"código da máquina": "código do Vida"}`, ex.:
+  `{"HDLE": "HDL"}`. Resolve o caso de itens de Sistema Fechado da URIT (ex.: `HDLE`), cujo código
+  não pode ser alterado na máquina, sem precisar recriar o item.
+  - **Envio (todas):** antes do POST ao lab-apoio, troca o código da máquina pelo do Vida nos
+    resultados que trazem lista `results` com o código em `code` (CA-150, URIT-8021) ou `test` (PKL).
+    Payloads de hemograma (BH5100, MEK7300, VIDAS1600), que não têm código por item em `results`,
+    passam inalterados.
+  - **Consulta (quem busca por etiqueta):** CA-150 e URIT-8021 traduzem o código do atributo do Vida
+    para o código da máquina antes de montar o DSR (senão a máquina não reconhece o exame).
+  - Códigos iguais nos dois lados não precisam entrar no mapa. A chave é lida de qualquer
+    `config_<maquina>.json` e, se faltar, é acrescentada vazia automaticamente.
+
 ## 7.2.0 - 2026-11-26
 
 - Modo TCP opcional na BH5100 (`"modo": "tcp"`, porta padrão 5100); default continua serial.

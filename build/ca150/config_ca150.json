@@ -7,6 +7,18 @@
     "tcp_host": "0.0.0.0",
     "tcp_port": 5150,
     "consult_url": "https://apoio.internal.vidaexame.com/api/interfacing/tag?franchise_credential_id={franchise_credential_id}",
+    "depara_codigos": {
+        "AURE": "ACURI",
+        "BITE": "BILIT",
+        "COLE": "COT",
+        "CRE": "CRE",
+        "FALE": "FALC",
+        "FERRE": "FER",
+        "HDLE": "HDL",
+        "TGOE": "TGO",
+        "TGPE": "TGP",
+        "TRIE": "TRIGL"
+    },
     "webhook_url_teste_local": "http://localhost:8039/api/integration/ca-150?franchise_credential_id={franchise_credential_id}",
     "consult_url_teste_local": "http://localhost:8039/api/interfacing/tag?franchise_credential_id={franchise_credential_id}"
 }
